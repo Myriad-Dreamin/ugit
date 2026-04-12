@@ -1,0 +1,9 @@
+.codex
+.next
+.pnpm-store
+.meow-team-worktrees
+node_modules
+openspec
+out
+build
+coverage

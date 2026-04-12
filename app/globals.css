@@ -1,0 +1,85 @@
+:root {
+  color-scheme: light;
+  --bg-start: #f7f1e3;
+  --bg-end: #f0d8b8;
+  --card-bg: rgba(255, 252, 247, 0.9);
+  --card-border: rgba(117, 79, 36, 0.18);
+  --text-main: #24180c;
+  --text-muted: #684d31;
+  --accent: #a54916;
+  --shadow: 0 24px 70px rgba(84, 49, 18, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.72), transparent 42%),
+    linear-gradient(160deg, var(--bg-start), var(--bg-end));
+  color: var(--text-main);
+  font-family:
+    "Iowan Old Style",
+    "Palatino Linotype",
+    "URW Palladio L",
+    Georgia,
+    serif;
+}
+
+.page-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+}
+
+.hero-card {
+  width: min(100%, 560px);
+  padding: 40px;
+  border: 1px solid var(--card-border);
+  border-radius: 24px;
+  background: var(--card-bg);
+  box-shadow: var(--shadow);
+}
+
+.hero-eyebrow {
+  margin: 0 0 16px;
+  color: var(--accent);
+  font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.hero-card h1 {
+  margin: 0;
+  font-size: clamp(3rem, 10vw, 4.4rem);
+  line-height: 0.95;
+}
+
+.hero-subtitle {
+  margin: 16px 0 0;
+  max-width: 28ch;
+  color: var(--text-muted);
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .page-shell {
+    padding: 20px;
+  }
+
+  .hero-card {
+    padding: 28px 24px;
+  }
+}
