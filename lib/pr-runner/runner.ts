@@ -71,17 +71,7 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
 
     const workflowSummary = await executeWorkflowPackages(worktreePath, runCommand);
 
-    if (!isLatestCiJob(job.id, options.storage)) {
-      completeCiJob({
-        jobId: job.id,
-        status: "superseded",
-        resultPath: null,
-        errorMessage: SUPERSEDED_CI_JOB_MESSAGE,
-        mergeStatus: "skipped",
-        now,
-        storage: options.storage,
-      });
-
+    if (markJobSupersededIfStale(job, options, SUPERSEDED_CI_JOB_MESSAGE)) {
       return;
     }
 
@@ -90,12 +80,18 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
           repositoryPath: job.repositoryPath,
           baseBranch: job.baseBranch,
           commitHash: job.commitHash,
+          canMutate: () => isLatestCiJob(job.id, options.storage),
           runCommand,
         })
       : {
           status: "skipped" as const,
           message: "Skipped auto-merge because at least one workflow failed.",
         };
+
+    if (markJobSupersededIfStale(job, options, SUPERSEDED_CI_JOB_MESSAGE)) {
+      return;
+    }
+
     const status = !workflowSummary.success
       ? "failed"
       : mergeResult.status === "succeeded"
@@ -119,6 +115,10 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
       merge: mergeResult,
     };
 
+    if (markJobSupersededIfStale(job, options, resultArtifact.errorMessage)) {
+      return;
+    }
+
     const artifactPath = writeCiResultArtifact(resultArtifact, {
       cwd: options.cwd,
     });
@@ -133,20 +133,6 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
       storage: options.storage,
     });
   } catch (error) {
-    if (!isLatestCiJob(job.id, options.storage)) {
-      completeCiJob({
-        jobId: job.id,
-        status: "superseded",
-        resultPath: null,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        mergeStatus: "skipped",
-        now,
-        storage: options.storage,
-      });
-
-      return;
-    }
-
     resultArtifact = {
       jobId: job.id,
       pullRequestId: job.pullRequestId,
@@ -167,6 +153,16 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
       },
     };
 
+    if (
+      markJobSupersededIfStale(job, options, error instanceof Error ? error.message : String(error))
+    ) {
+      return;
+    }
+
+    if (markJobSupersededIfStale(job, options, resultArtifact.errorMessage)) {
+      return;
+    }
+
     const artifactPath = writeCiResultArtifact(resultArtifact, {
       cwd: options.cwd,
     });
@@ -185,6 +181,28 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
       await cleanupDetachedWorktree(job.repositoryPath, worktreePath, runCommand);
     }
   }
+}
+
+function markJobSupersededIfStale(
+  job: Pick<ClaimedCiJob, "id">,
+  options: Pick<RunnerOptions, "now" | "storage">,
+  errorMessage: string | null,
+): boolean {
+  if (isLatestCiJob(job.id, options.storage)) {
+    return false;
+  }
+
+  completeCiJob({
+    jobId: job.id,
+    status: "superseded",
+    resultPath: null,
+    errorMessage,
+    mergeStatus: "skipped",
+    now: options.now,
+    storage: options.storage,
+  });
+
+  return true;
 }
 
 async function drainRunner(options: RunnerOptions): Promise<void> {

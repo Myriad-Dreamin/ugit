@@ -4,15 +4,19 @@ import { combineCommandOutput, runAsyncCommand, type AsyncCommandRunner } from "
 
 export type FastForwardMergeResult = Readonly<{
   message: string;
-  status: "succeeded" | "failed";
+  status: "succeeded" | "failed" | "skipped";
 }>;
 
 export type AttemptFastForwardMergeOptions = Readonly<{
   baseBranch: string;
+  canMutate?: () => boolean | Promise<boolean>;
   commitHash: string;
   repositoryPath: string;
   runCommand?: AsyncCommandRunner;
 }>;
+
+const SUPERSEDED_MERGE_MESSAGE =
+  "Skipped auto-merge because the CI job was superseded by a newer pull-request synchronization request.";
 
 export async function attemptFastForwardMerge(
   options: AttemptFastForwardMergeOptions,
@@ -60,6 +64,13 @@ export async function attemptFastForwardMerge(
   ]);
   const currentBranch = currentBranchResult.exitCode === 0 ? currentBranchResult.stdout : null;
 
+  if (!(await canMutateRef(options))) {
+    return {
+      status: "skipped",
+      message: SUPERSEDED_MERGE_MESSAGE,
+    };
+  }
+
   if (currentBranch === options.baseBranch) {
     const mergeResult = await runCommand("git", [
       "-C",
@@ -102,4 +113,12 @@ export async function attemptFastForwardMerge(
     status: "succeeded",
     message: `Fast-forwarded ${options.baseBranch} to ${options.commitHash}.`,
   };
+}
+
+async function canMutateRef(options: AttemptFastForwardMergeOptions): Promise<boolean> {
+  if (!options.canMutate) {
+    return true;
+  }
+
+  return await options.canMutate();
 }
