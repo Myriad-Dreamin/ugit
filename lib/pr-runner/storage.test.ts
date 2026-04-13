@@ -390,6 +390,52 @@ describe("updatePullRequest", () => {
     });
     expect(readCiJob("job-2", storage)).toBeNull();
   });
+
+  it("rejects synchronizing a merged pull request", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = path.join(workspace, "repos", "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef1"), {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "succeeded",
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      storage,
+    });
+
+    try {
+      queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef2"), {
+        storage,
+        now: createNowFactory("2026-04-14T00:00:20.000Z"),
+        jobIdFactory: createJobIdFactory("job-2"),
+      });
+
+      throw new Error("Expected merged PR sync to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PullRequestRequestError);
+      expect((error as PullRequestRequestError).statusCode).toBe(409);
+      expect((error as Error).message).toBe("Merged pull requests cannot be synchronized.");
+    }
+
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      headCommitHash: "abcdef1",
+      latestJobId: "job-1",
+      status: "merged",
+    });
+    expect(readCiJob("job-1", storage)).toMatchObject({
+      id: "job-1",
+      status: "succeeded",
+    });
+    expect(readCiJob("job-2", storage)).toBeNull();
+  });
 });
 
 function createWorkspace(): string {

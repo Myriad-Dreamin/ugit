@@ -78,6 +78,58 @@ describe("listPullRequests service", () => {
   });
 });
 
+describe("synchronizePullRequest service", () => {
+  it("rejects syncing a merged pull request without nudging the runner", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    synchronizePullRequest(createSyncPayload(repositoryPath), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "succeeded",
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      storage,
+    });
+    mockedNudgePullRequestRunner.mockClear();
+
+    try {
+      synchronizePullRequest(
+        createSyncPayload(repositoryPath, {
+          commitHash: "abcdef2",
+        }),
+        {
+          cwd: workspace,
+          storage,
+          now: createNowFactory("2026-04-14T00:00:20.000Z"),
+          jobIdFactory: createJobIdFactory("job-2"),
+        },
+      );
+
+      throw new Error("Expected merged PR sync to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PullRequestRequestError);
+      expect((error as PullRequestRequestError).statusCode).toBe(409);
+      expect((error as Error).message).toBe("Merged pull requests cannot be synchronized.");
+    }
+
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      headCommitHash: "abcdef1",
+      latestJobId: "job-1",
+      status: "merged",
+    });
+    expect(mockedNudgePullRequestRunner).not.toHaveBeenCalled();
+  });
+});
+
 describe("editPullRequest service", () => {
   it("updates metadata without nudging the runner", () => {
     const workspace = createWorkspace();
@@ -237,7 +289,16 @@ function createRepositorySkeleton(cwd: string, repositoryName: string): string {
   return repositoryPath;
 }
 
-function createSyncPayload(repositoryPath: string): {
+function createSyncPayload(
+  repositoryPath: string,
+  overrides: Readonly<{
+    commitHash?: string;
+    baseBranch?: string;
+    title?: string;
+    body?: string;
+    draft?: boolean;
+  }> = {},
+): {
   publishedBranch: {
     repositoryPath: string;
     branchName: string;
@@ -258,16 +319,16 @@ function createSyncPayload(repositoryPath: string): {
     publishedBranch: {
       repositoryPath,
       branchName: "feature/test",
-      commitHash: "abcdef1",
+      commitHash: overrides.commitHash ?? "abcdef1",
       remoteName: "origin",
     },
     pullRequest: {
       repositoryPath,
       branchName: "feature/test",
-      baseBranch: "main",
-      title: "Add the runner",
-      body: "Initial body.",
-      draft: false,
+      baseBranch: overrides.baseBranch ?? "main",
+      title: overrides.title ?? "Add the runner",
+      body: overrides.body ?? "Initial body.",
+      draft: overrides.draft ?? false,
       remoteName: "origin",
     },
   };

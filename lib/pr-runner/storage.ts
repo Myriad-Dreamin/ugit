@@ -263,9 +263,9 @@ export function queuePullRequestSynchronization(
           request.repositoryPath,
           request.pullRequest.branchName,
         );
-        let pullRequestId = existingPullRequest?.id ?? null;
+        let pullRequestId: number;
 
-        if (pullRequestId === null) {
+        if (!existingPullRequest) {
           const insertedPullRequest = transaction
             .prepare<
               [
@@ -318,6 +318,12 @@ export function queuePullRequestSynchronization(
 
           pullRequestId = Number(insertedPullRequest.lastInsertRowid);
         } else {
+          pullRequestId = existingPullRequest.id;
+
+          if (existingPullRequest.status === "merged") {
+            throw new PullRequestRequestError("Merged pull requests cannot be synchronized.", 409);
+          }
+
           transaction
             .prepare<
               [
