@@ -13,6 +13,7 @@ import type {
   ValidatedPullRequestEditRequest,
   ValidatedPullRequestSyncRequest,
 } from "./validation";
+import { PullRequestRequestError } from "./validation";
 
 export const MAX_ACTIVE_CI_JOBS = 4;
 export const SUPERSEDED_CI_JOB_MESSAGE =
@@ -827,6 +828,10 @@ export function updatePullRequest(
   const nextDraft = request.draft ?? existingPullRequest.draft;
 
   if (nextBaseBranch !== existingPullRequest.baseBranch) {
+    if (existingPullRequest.status === "merged") {
+      throw new PullRequestRequestError("Merged pull requests cannot change base branches.", 409);
+    }
+
     const queued = queuePullRequestSynchronization(
       {
         repositoryName: existingPullRequest.repositoryName,

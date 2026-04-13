@@ -12,7 +12,9 @@ vi.mock("@/lib/pr-runner/runner", () => ({
 }));
 
 import { editPullRequest, listPullRequests, synchronizePullRequest } from "@/lib/pr-runner/service";
+import { completeCiJob, readPullRequest } from "@/lib/pr-runner/storage";
 import { resetStorageCacheForTests } from "@/lib/storage/sqlite";
+import { PullRequestRequestError } from "@/lib/pr-runner/validation";
 
 const workspaces: string[] = [];
 
@@ -164,6 +166,58 @@ describe("editPullRequest service", () => {
       cwd: workspace,
       storage,
     });
+  });
+
+  it("rejects retargeting a merged pull request", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    synchronizePullRequest(createSyncPayload(repositoryPath), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "succeeded",
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      storage,
+    });
+    mockedNudgePullRequestRunner.mockClear();
+
+    try {
+      editPullRequest(
+        {
+          repositoryPath,
+          branchName: "feature/test",
+          baseBranch: "release",
+        },
+        {
+          cwd: workspace,
+          storage,
+          now: createNowFactory("2026-04-14T00:00:20.000Z"),
+          jobIdFactory: createJobIdFactory("job-2"),
+        },
+      );
+
+      throw new Error("Expected merged PR retarget to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PullRequestRequestError);
+      expect((error as PullRequestRequestError).statusCode).toBe(409);
+      expect((error as Error).message).toBe("Merged pull requests cannot change base branches.");
+    }
+
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      baseBranch: "main",
+      latestJobId: "job-1",
+      status: "merged",
+    });
+    expect(mockedNudgePullRequestRunner).not.toHaveBeenCalled();
   });
 });
 
