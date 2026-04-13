@@ -235,7 +235,7 @@ describe("createRepository", () => {
     });
   });
 
-  it("runs ssh machine setup commands through sh -lc without double-quoting", () => {
+  it("passes the full ssh setup payload to remote sh -lc as one argument", () => {
     const repositoryPath = createGitRepository();
     const machineRoot = createWorkspace();
     const upstreamUrl = "https://github.com/example/upstream.git";
@@ -308,7 +308,9 @@ function runCommandWithLocalSsh(
   };
 
   if (command === "ssh") {
-    return execFileSync("sh", [...args.slice(2)], execOptions).trim();
+    const remoteCommand = args.slice(1).join(" ");
+
+    return execFileSync("sh", ["-lc", remoteCommand], execOptions).trim();
   }
 
   return execFileSync(command, [...args], execOptions).trim();
