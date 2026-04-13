@@ -1,6 +1,7 @@
 import { Builtins, Cli } from "clipanion";
 import packageJson from "../package.json";
 import { CreateCommand } from "./commands/create";
+import { ServeCommand } from "./commands/serve";
 
 export function createCli(): Cli {
   const cli = new Cli({
@@ -10,6 +11,7 @@ export function createCli(): Cli {
   });
 
   cli.register(CreateCommand);
+  cli.register(ServeCommand);
   cli.register(Builtins.HelpCommand);
   cli.register(Builtins.VersionCommand);
 

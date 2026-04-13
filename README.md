@@ -2,23 +2,28 @@
 
 `ugit` is a Git-first service for mirroring repositories onto a machine you control and, in later changes, orchestrating pull-request publication, CI, and merge automation.
 
-## Current scope
+## Install the private CLI
 
-This repository currently ships the first CLI slice only:
+`ugit-cli` is private to this monorepo. From the repository root, build it and link it globally with `pnpm`:
+
+```bash
+pnpm install
+pnpm build:cli
+pnpm --dir packages/ugit-cli link --global
+```
+
+The global `ugit` binary now points at this checkout. Re-run `pnpm build:cli` after CLI code changes before using the linked command.
+
+## Current CLI surface
+
+This repository currently ships these CLI commands:
 
 ```bash
 ugit create -m <machine> [directory]
+ugit serve -m <machine> [-p <local-port>]
 ```
 
-The command bootstraps a repository on a configured ugit machine and records the selected machine in local Git config for future ugit commands.
-
-## Prerequisites for `ugit create`
-
-- Git must be installed and available on `PATH`.
-- The target directory must already be the root of a local Git repository.
-- The local repository must already have an `upstream` remote configured.
-- The selected machine must be present in `~/.local/share/ugit/config.json`.
-- For non-local machines, SSH access to the configured host must already work.
+`ugit create` bootstraps a repository on a configured ugit machine and records the selected machine in local Git config for future ugit commands. `ugit serve` opens an SSH local port forward so the selected ugit server is reachable at `http://127.0.0.1:<local-port>`.
 
 ## Config file
 
@@ -43,13 +48,23 @@ The command bootstraps a repository on a configured ugit machine and records the
 
 Field notes:
 
-- `ssh-machine`: SSH host name used for remote setup.
+- `ssh-machine`: SSH host name used for remote repository setup and `ugit serve`.
 - `path`: Absolute path to the ugit server root on that machine.
-- `serverPort`: Reserved for future commands such as `ugit serve`.
+- `serverPort`: Port where the ugit HTTP server listens. `ugit serve` uses it as the remote port and also as the default local port.
 
 Machines named `local` or `localhost`, or machines whose `ssh-machine` is `local` or `localhost`, are treated as local filesystem targets. Their local Git `origin` is set to the repository path directly instead of an `ssh://` URL.
 
-## What `ugit create` does
+## `ugit create`
+
+### Prerequisites
+
+- Git must be installed and available on `PATH`.
+- The target directory must already be the root of a local Git repository.
+- The local repository must already have an `upstream` remote configured.
+- The selected machine must be present in `~/.local/share/ugit/config.json`.
+- For non-local machines, SSH access to the configured host must already work.
+
+### What it does
 
 For `ugit create -m <machine> [directory]`, the CLI:
 
@@ -61,11 +76,29 @@ For `ugit create -m <machine> [directory]`, the CLI:
 - configures the local repository's `origin` remote
 - records the chosen machine in local Git config under `ugit.machine`
 
+## `ugit serve`
+
+### Prerequisites
+
+- The selected machine must be present in `~/.local/share/ugit/config.json`.
+- The selected machine's ugit HTTP server must already be listening on `serverPort`.
+- SSH access to the configured `ssh-machine` must already work, including entries that point at `localhost`.
+- The chosen local port must be free on the current machine.
+
+### What it does
+
+For `ugit serve -m <machine> [-p <local-port>]`, the CLI:
+
+- resolves the selected machine from the shared ugit config
+- defaults `local-port` to the configured `serverPort` when `-p` is omitted
+- starts `ssh -N -o ExitOnForwardFailure=yes -L <local-port>:127.0.0.1:<serverPort> <ssh-machine>`
+- prints the forwarded local URL as `http://127.0.0.1:<local-port>`
+- keeps the SSH tunnel attached to the current terminal until interrupted
+
 ## Planned follow-up scope
 
 The following remain intentionally out of scope for this change:
 
-- `ugit serve`
 - pull-request publish and synchronize commands
 - CI queueing and `.data/ci-results` management
 - merge automation
