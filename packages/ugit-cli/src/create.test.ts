@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -301,19 +301,21 @@ function runCommandWithLocalSsh(
   args: readonly string[],
   options: CommandRunnerOptions = {},
 ): string {
-  const execOptions = {
+  const execOptions: ExecFileSyncOptions = {
     cwd: options.cwd,
-    encoding: "utf8" as const,
-    stdio: ["ignore", "pipe", "pipe"] as const,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
   };
 
   if (command === "ssh") {
     const remoteCommand = args.slice(1).join(" ");
 
-    return execFileSync("sh", ["-lc", remoteCommand], execOptions).trim();
+    return execFileSync("sh", ["-lc", remoteCommand], execOptions).toString().trim();
   }
 
-  return execFileSync(command, [...args], execOptions).trim();
+  return execFileSync(command, [...args], execOptions)
+    .toString()
+    .trim();
 }
 
 function createLocalConfig(machinePath: string): UgitConfig {

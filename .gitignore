@@ -9,4 +9,6 @@ pnpm-debug.log*
 .DS_Store
 .data/repos/*
 !.data/repos/.gitkeep
+.data/ci-results/*
+.data/ci-results/.gitkeep
 .data/storage/*.sqlite*
