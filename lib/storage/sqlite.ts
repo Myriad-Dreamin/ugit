@@ -1,4 +1,4 @@
-import "server-only";
+import "@/lib/storage/server-only";
 
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
@@ -67,7 +67,9 @@ declare global {
   var __ugitSqliteStorageGlobals: StorageGlobals | undefined;
 }
 
-export function resolveStorageLocation(options: StorageOptions | string = {}): ResolvedStorageLocation {
+export function resolveStorageLocation(
+  options: StorageOptions | string = {},
+): ResolvedStorageLocation {
   const normalizedOptions = normalizeStorageOptions(options);
   const inputPath = normalizedOptions.location ?? DEFAULT_STORAGE_LOCATION;
 
@@ -423,7 +425,9 @@ function assertOrderedMigrations(migrations: readonly StorageMigration[]): void 
 
   for (const migration of migrations) {
     if (!Number.isInteger(migration.version) || migration.version < 0) {
-      throw new Error(`Storage migration "${migration.name}" must use a non-negative integer version.`);
+      throw new Error(
+        `Storage migration "${migration.name}" must use a non-negative integer version.`,
+      );
     }
 
     if (migration.version <= previousVersion) {

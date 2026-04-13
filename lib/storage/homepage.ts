@@ -1,4 +1,4 @@
-import "server-only";
+import "@/lib/storage/server-only";
 
 import {
   applyMigrations,
@@ -40,7 +40,7 @@ const DEFAULT_HOMEPAGE_CONTENT: HomepageContentInput = {
   endpointPath: "/api/repositories",
   repositoriesPath: ".data/repos",
   subtitle:
-    "The server seeds a real example Git repository on demand and exposes the current repository listing over HTTP.",
+    "The server seeds a real example Git repository on demand and exposes the current repository listing over HTTP, plus direct repository pages for the configured owner.",
   title: "Local repositories, served from",
 };
 const HOMEPAGE_MIGRATIONS: readonly StorageMigration[] = [
@@ -165,9 +165,7 @@ function readHomepageContent(database: DatabaseSync): HomepageContent | null {
 
 function writeHomepageContent(database: DatabaseSync, content: HomepageContent): void {
   database
-    .prepare<
-      [number, string, string, string, string, string, string, string]
-    >(
+    .prepare<[number, string, string, string, string, string, string, string]>(
       `
         INSERT INTO homepage_content (
           id,
