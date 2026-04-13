@@ -12,6 +12,8 @@ import {
 import type { ValidatedPullRequestSyncRequest } from "./validation";
 
 export const MAX_ACTIVE_CI_JOBS = 4;
+export const SUPERSEDED_CI_JOB_MESSAGE =
+  "Superseded by a newer pull-request synchronization request before completion.";
 
 export type PullRequestStatus = "queued" | "running" | "failed" | "passed" | "merged";
 export type CiJobStatus =
@@ -90,7 +92,7 @@ export type ClaimRunnableJobsOptions = Readonly<{
 
 export type CompleteCiJobOptions = Readonly<{
   jobId: string;
-  status: Exclude<CiJobStatus, "queued" | "running" | "superseded">;
+  status: Exclude<CiJobStatus, "queued" | "running">;
   resultPath: string | null;
   errorMessage?: string | null;
   mergeStatus?: string | null;
@@ -431,10 +433,12 @@ export function claimRunnableJobs(options: ClaimRunnableJobsOptions = {}): reado
         const queuedJobs = transaction
           .prepare<[], CiJobRow>(
             `
-              SELECT *
+              SELECT ci_jobs.*
               FROM ci_jobs
-              WHERE status = 'queued'
-              ORDER BY created_at ASC, id ASC
+              INNER JOIN pull_requests ON pull_requests.id = ci_jobs.pull_request_id
+              WHERE ci_jobs.status = 'queued'
+                AND pull_requests.latest_job_id = ci_jobs.id
+              ORDER BY ci_jobs.created_at ASC, ci_jobs.id ASC
             `,
           )
           .all();
@@ -550,6 +554,38 @@ export function requeueRunningJobs(
 
         if (updateResult.changes > 0) {
           transaction
+            .prepare<[string, string, string, string, string]>(
+              `
+                UPDATE ci_jobs
+                SET
+                  status = 'superseded',
+                  result_path = NULL,
+                  merge_status = 'skipped',
+                  error_message = CASE
+                    WHEN error_message IS NULL THEN ?
+                    WHEN error_message = ? THEN error_message
+                    ELSE ? || CHAR(10) || error_message
+                  END,
+                  finished_at = COALESCE(finished_at, ?),
+                  updated_at = ?
+                WHERE status = 'queued'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM pull_requests
+                    WHERE pull_requests.id = ci_jobs.pull_request_id
+                      AND pull_requests.latest_job_id <> ci_jobs.id
+                  )
+              `,
+            )
+            .run(
+              SUPERSEDED_CI_JOB_MESSAGE,
+              SUPERSEDED_CI_JOB_MESSAGE,
+              SUPERSEDED_CI_JOB_MESSAGE,
+              timestamp,
+              timestamp,
+            );
+
+          transaction
             .prepare<[PullRequestStatus, string]>(
               `
                 UPDATE pull_requests
@@ -575,6 +611,24 @@ export function completeCiJob(options: CompleteCiJobOptions): CiJobRecord {
       database,
       (transaction) => {
         const now = (options.now ?? (() => new Date()))().toISOString();
+        const job = readCiJobById(transaction, options.jobId);
+
+        if (!job) {
+          throw new Error(`Unknown CI job ${options.jobId}.`);
+        }
+
+        const isLatestJob = isLatestCiJobForPullRequest(
+          transaction,
+          job.pullRequestId,
+          options.jobId,
+        );
+        const shouldSupersedeJob = options.status === "superseded" || !isLatestJob;
+        const jobStatus = shouldSupersedeJob ? "superseded" : options.status;
+        const resultPath = shouldSupersedeJob ? null : options.resultPath;
+        const errorMessage = shouldSupersedeJob
+          ? buildSupersededCiJobMessage(options.errorMessage)
+          : (options.errorMessage ?? null);
+        const mergeStatus = shouldSupersedeJob ? "skipped" : (options.mergeStatus ?? null);
 
         transaction
           .prepare<
@@ -592,36 +646,53 @@ export function completeCiJob(options: CompleteCiJobOptions): CiJobRecord {
               WHERE id = ?
             `,
           )
-          .run(
-            options.status,
-            options.resultPath,
-            options.errorMessage ?? null,
-            options.mergeStatus ?? null,
-            now,
-            now,
-            options.jobId,
-          );
+          .run(jobStatus, resultPath, errorMessage, mergeStatus, now, now, options.jobId);
 
-        const job = readCiJobById(transaction, options.jobId);
-
-        if (!job) {
-          throw new Error(`Unknown CI job ${options.jobId}.`);
+        if (!shouldSupersedeJob) {
+          transaction
+            .prepare<[PullRequestStatus, string, number]>(
+              `
+                UPDATE pull_requests
+                SET status = ?, updated_at = ?
+                WHERE id = ?
+              `,
+            )
+            .run(mapJobStatusToPullRequestStatus(options.status), now, job.pullRequestId);
         }
-
-        transaction
-          .prepare<[PullRequestStatus, string, number]>(
-            `
-              UPDATE pull_requests
-              SET status = ?, updated_at = ?
-              WHERE id = ?
-            `,
-          )
-          .run(mapJobStatusToPullRequestStatus(options.status), now, job.pullRequestId);
 
         return readCiJobById(transaction, options.jobId)!;
       },
       "immediate",
     ),
+  );
+}
+
+export function isLatestCiJob(
+  jobId: string,
+  storage: StorageOptions | string | undefined = undefined,
+): boolean {
+  ensurePullRequestStorage(storage);
+
+  return withStorage(storage, (database) => {
+    const job = readCiJobById(database, jobId);
+
+    if (!job) {
+      throw new Error(`Unknown CI job ${jobId}.`);
+    }
+
+    return isLatestCiJobForPullRequest(database, job.pullRequestId, jobId);
+  });
+}
+
+export function readPullRequest(
+  repositoryPath: string,
+  branchName: string,
+  storage: StorageOptions | string | undefined = undefined,
+): PullRequestRecord | null {
+  ensurePullRequestStorage(storage);
+
+  return withStorage(storage, (database) =>
+    readPullRequestByRepositoryBranch(database, repositoryPath, branchName),
   );
 }
 
@@ -642,9 +713,41 @@ function mapJobStatusToPullRequestStatus(
       return "merged";
     case "merge_failed":
       return "failed";
+    case "superseded":
+      return "queued";
     default:
       return "failed";
   }
+}
+
+function isLatestCiJobForPullRequest(
+  database: DatabaseSync,
+  pullRequestId: number,
+  jobId: string,
+): boolean {
+  const row = database
+    .prepare<[number], Pick<PullRequestRow, "latest_job_id">>(
+      `
+        SELECT latest_job_id
+        FROM pull_requests
+        WHERE id = ?
+      `,
+    )
+    .get(pullRequestId);
+
+  if (!row) {
+    throw new Error(`Unknown pull request ${pullRequestId}.`);
+  }
+
+  return row.latest_job_id === jobId;
+}
+
+function buildSupersededCiJobMessage(errorMessage: string | null | undefined): string {
+  if (!errorMessage || errorMessage === SUPERSEDED_CI_JOB_MESSAGE) {
+    return SUPERSEDED_CI_JOB_MESSAGE;
+  }
+
+  return `${SUPERSEDED_CI_JOB_MESSAGE}\n${errorMessage}`;
 }
 
 function readPullRequestByRepositoryBranch(

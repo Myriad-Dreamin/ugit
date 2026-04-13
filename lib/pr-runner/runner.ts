@@ -7,7 +7,14 @@ import type { StorageOptions } from "@/lib/storage/sqlite";
 import { attemptFastForwardMerge } from "./merge";
 import { runAsyncCommand, type AsyncCommandRunner } from "./process";
 import { writeCiResultArtifact, type CiResultArtifact } from "./results";
-import { claimRunnableJobs, completeCiJob, requeueRunningJobs, type ClaimedCiJob } from "./storage";
+import {
+  SUPERSEDED_CI_JOB_MESSAGE,
+  claimRunnableJobs,
+  completeCiJob,
+  isLatestCiJob,
+  requeueRunningJobs,
+  type ClaimedCiJob,
+} from "./storage";
 import { executeWorkflowPackages } from "./workflows";
 
 type RunnerOptions = Readonly<{
@@ -63,6 +70,21 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
     worktreePath = await createDetachedWorktree(job, runCommand);
 
     const workflowSummary = await executeWorkflowPackages(worktreePath, runCommand);
+
+    if (!isLatestCiJob(job.id, options.storage)) {
+      completeCiJob({
+        jobId: job.id,
+        status: "superseded",
+        resultPath: null,
+        errorMessage: SUPERSEDED_CI_JOB_MESSAGE,
+        mergeStatus: "skipped",
+        now,
+        storage: options.storage,
+      });
+
+      return;
+    }
+
     const mergeResult = workflowSummary.success
       ? await attemptFastForwardMerge({
           repositoryPath: job.repositoryPath,
@@ -111,6 +133,20 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
       storage: options.storage,
     });
   } catch (error) {
+    if (!isLatestCiJob(job.id, options.storage)) {
+      completeCiJob({
+        jobId: job.id,
+        status: "superseded",
+        resultPath: null,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        mergeStatus: "skipped",
+        now,
+        storage: options.storage,
+      });
+
+      return;
+    }
+
     resultArtifact = {
       jobId: job.id,
       pullRequestId: job.pullRequestId,
