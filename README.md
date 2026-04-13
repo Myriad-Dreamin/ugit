@@ -7,6 +7,9 @@
 This repository now ships the first end-to-end CLI and server slice:
 
 ```bash
+ugit pr list [-m <machine>] [--state <open|merged|all>] [--base <branch>] [--head <branch>] [directory]
+ugit pr create [-m <machine>] --base <branch> --title <title> [--body <text>] [--draft] [directory]
+ugit pr edit [-m <machine>] [--base <branch>] [--title <title>] [--body <text>] [--draft|--ready] [directory]
 ugit create -m <machine> [directory]
 ugit serve [-m <machine>] [-p <local-port>] [directory]
 ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--draft] [directory]
@@ -16,7 +19,13 @@ ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--d
 
 `ugit serve` opens an SSH local-port forward to the machine's Next.js server. For local machines, it short-circuits and prints the direct URL.
 
-`ugit pr sync` pushes the current branch to the ugit `origin`, synchronizes pull-request metadata over HTTP-over-SSH, queues CI, and prints the queued job state.
+`ugit pr list` queries the ugit server for repository-scoped pull requests and prints a table with the latest CI state.
+
+`ugit pr create` is the user-facing create flow. It rejects duplicate current-branch pull requests, pushes the branch to the ugit `origin`, synchronizes metadata, queues CI, and prints the queued job state.
+
+`ugit pr edit` updates the current branch's stored pull-request metadata without pushing. Changing the base branch also queues a new CI run.
+
+`ugit pr sync` is the lower-level republish and rerun command for branches that already have a pull request and need CI rerun after additional commits.
 
 ## Prerequisites for `ugit create`
 
@@ -72,6 +81,9 @@ For `ugit create -m <machine> [directory]`, the CLI:
 Commands that operate on an existing ugit-backed repository can infer the target machine from local Git config:
 
 - `ugit serve`
+- `ugit pr list`
+- `ugit pr create`
+- `ugit pr edit`
 - `ugit pr sync`
 
 Pass `-m, --machine` to override the inferred machine.
@@ -84,6 +96,41 @@ For `ugit serve [-m <machine>] [-p <local-port>] [directory]`, the CLI:
 - prints the direct local URL for local machines
 - otherwise runs `ssh -N -T -L <local-port>:127.0.0.1:<serverPort> <ssh-machine>`
 
+## Pull-request command boundaries
+
+- Use `ugit pr create` the first time you publish a branch as a pull request.
+- Use `ugit pr edit` when only metadata changes, or when the base branch changes and you want CI rerun against the new target branch.
+- Use `ugit pr sync` after new commits land on a branch that already has a pull request.
+
+## What `ugit pr list` does
+
+For `ugit pr list [--state <open|merged|all>] [--base <branch>] [--head <branch>] [directory]`, the CLI:
+
+- resolves the repository root and target machine
+- queries the ugit server over HTTP-over-SSH instead of reading remote state from disk
+- filters pull requests for the current repository by state, base branch, and head branch
+- prints numeric PR IDs, branch targets, titles, and the latest CI job status
+
+## What `ugit pr create` does
+
+For `ugit pr create --base <branch> --title <title> [--body <text>] [--draft] [directory]`, the CLI:
+
+- resolves the repository root, target machine, and current branch
+- rejects duplicate pull requests for the same repository branch before any push happens
+- pushes the current branch to the ugit `origin`
+- publishes the branch using the shared `GitPlatformPublishedBranch` contract
+- synchronizes PR metadata using the shared `SynchronizeGitPlatformPullRequestArgs` contract
+- queues CI on the remote ugit server and prints the queued job ID plus queue position
+
+## What `ugit pr edit` does
+
+For `ugit pr edit [--base <branch>] [--title <title>] [--body <text>] [--draft|--ready] [directory]`, the CLI:
+
+- resolves the repository root, target machine, and current branch
+- updates stored pull-request metadata over HTTP-over-SSH without pushing new commits
+- reuses the existing synchronization queue when the base branch changes so CI reruns against the new base
+- leaves existing CI queue history intact for metadata-only edits
+
 ## What `ugit pr sync` does
 
 For `ugit pr sync --base <branch> --title <title> [--body <text>] [directory]`, the CLI:
@@ -93,10 +140,17 @@ For `ugit pr sync --base <branch> --title <title> [--body <text>] [directory]`, 
 - publishes the branch using the shared `GitPlatformPublishedBranch` contract
 - synchronizes PR metadata using the shared `SynchronizeGitPlatformPullRequestArgs` contract
 - queues CI on the remote ugit server and prints the queued job ID plus queue position
+- repurposes the existing pull request instead of creating a second record for the same branch
 
 ## Server-side PR runner contract
 
-The server exposes `POST /api/pull-requests/sync` and persists pull-request plus CI job state in SQLite.
+The server exposes repository-scoped pull-request APIs over HTTP-over-SSH:
+
+- `GET /api/pull-requests` lists stored pull requests for one repository and returns the latest CI job summary for each record
+- `PATCH /api/pull-requests` edits stored pull-request metadata and queues CI only when the base branch changes
+- `POST /api/pull-requests/sync` republishes a branch snapshot, updates pull-request metadata, and queues CI
+
+Pull-request and CI job state are persisted in SQLite.
 
 Queueing rules:
 

@@ -9,7 +9,10 @@ import {
   type StorageMigration,
   type StorageOptions,
 } from "@/lib/storage/sqlite";
-import type { ValidatedPullRequestSyncRequest } from "./validation";
+import type {
+  ValidatedPullRequestEditRequest,
+  ValidatedPullRequestSyncRequest,
+} from "./validation";
 
 export const MAX_ACTIVE_CI_JOBS = 4;
 export const SUPERSEDED_CI_JOB_MESSAGE =
@@ -79,10 +82,38 @@ export type QueuePullRequestResult = Readonly<{
   queuePosition: number;
 }>;
 
+export type PullRequestState = "open" | "merged";
+
+export type PullRequestSummaryRecord = Readonly<{
+  pullRequest: PullRequestRecord;
+  latestJob: CiJobRecord | null;
+  state: PullRequestState;
+}>;
+
 export type QueuePullRequestOptions = Readonly<{
   now?: () => Date;
   storage?: StorageOptions | string;
   jobIdFactory?: () => string;
+}>;
+
+export type ListPullRequestsOptions = Readonly<{
+  state?: PullRequestState | "all";
+  baseBranch?: string;
+  headBranch?: string;
+  storage?: StorageOptions | string;
+}>;
+
+export type UpdatePullRequestOptions = Readonly<{
+  now?: () => Date;
+  storage?: StorageOptions | string;
+  jobIdFactory?: () => string;
+}>;
+
+export type UpdatePullRequestResult = Readonly<{
+  pullRequest: PullRequestRecord;
+  latestJob: CiJobRecord | null;
+  rerunJob: CiJobRecord | null;
+  queuePosition: number | null;
 }>;
 
 export type ClaimRunnableJobsOptions = Readonly<{
@@ -138,6 +169,25 @@ type CiJobRow = {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
+};
+
+type PullRequestSummaryRow = PullRequestRow & {
+  ci_job_id: string | null;
+  ci_pull_request_id: number | null;
+  ci_repository_name: string | null;
+  ci_repository_path: string | null;
+  ci_branch_name: string | null;
+  ci_base_branch: string | null;
+  ci_commit_hash: string | null;
+  ci_remote_name: string | null;
+  ci_status: CiJobStatus | null;
+  ci_result_path: string | null;
+  ci_error_message: string | null;
+  ci_merge_status: string | null;
+  ci_created_at: string | null;
+  ci_updated_at: string | null;
+  ci_started_at: string | null;
+  ci_finished_at: string | null;
 };
 
 const MIGRATIONS: readonly StorageMigration[] = [
@@ -696,6 +746,156 @@ export function readPullRequest(
   );
 }
 
+export function listPullRequests(
+  repositoryPath: string,
+  options: ListPullRequestsOptions = {},
+): readonly PullRequestSummaryRecord[] {
+  ensurePullRequestStorage(options.storage);
+
+  return withStorage(options.storage, (database) => {
+    const filters = ["pull_requests.repository_path = ?"];
+    const parameters: Array<string> = [repositoryPath];
+
+    if (options.state === "open") {
+      filters.push("pull_requests.status <> 'merged'");
+    } else if (options.state === "merged") {
+      filters.push("pull_requests.status = 'merged'");
+    }
+
+    if (options.baseBranch) {
+      filters.push("pull_requests.base_branch = ?");
+      parameters.push(options.baseBranch);
+    }
+
+    if (options.headBranch) {
+      filters.push("pull_requests.branch_name = ?");
+      parameters.push(options.headBranch);
+    }
+
+    const rows = database
+      .prepare<string[], PullRequestSummaryRow>(
+        `
+          SELECT
+            pull_requests.*,
+            ci_jobs.id AS ci_job_id,
+            ci_jobs.pull_request_id AS ci_pull_request_id,
+            ci_jobs.repository_name AS ci_repository_name,
+            ci_jobs.repository_path AS ci_repository_path,
+            ci_jobs.branch_name AS ci_branch_name,
+            ci_jobs.base_branch AS ci_base_branch,
+            ci_jobs.commit_hash AS ci_commit_hash,
+            ci_jobs.remote_name AS ci_remote_name,
+            ci_jobs.status AS ci_status,
+            ci_jobs.result_path AS ci_result_path,
+            ci_jobs.error_message AS ci_error_message,
+            ci_jobs.merge_status AS ci_merge_status,
+            ci_jobs.created_at AS ci_created_at,
+            ci_jobs.updated_at AS ci_updated_at,
+            ci_jobs.started_at AS ci_started_at,
+            ci_jobs.finished_at AS ci_finished_at
+          FROM pull_requests
+          LEFT JOIN ci_jobs ON ci_jobs.id = pull_requests.latest_job_id
+          WHERE ${filters.join(" AND ")}
+          ORDER BY pull_requests.updated_at DESC, pull_requests.id DESC
+        `,
+      )
+      .all(...parameters);
+
+    return rows.map(toPullRequestSummaryRecord);
+  });
+}
+
+export function updatePullRequest(
+  request: ValidatedPullRequestEditRequest,
+  options: UpdatePullRequestOptions = {},
+): UpdatePullRequestResult | null {
+  ensurePullRequestStorage(options.storage);
+
+  const existingPullRequest = readPullRequest(
+    request.repositoryPath,
+    request.branchName,
+    options.storage,
+  );
+
+  if (!existingPullRequest) {
+    return null;
+  }
+
+  const nextBaseBranch = request.baseBranch ?? existingPullRequest.baseBranch;
+  const nextTitle = request.title ?? existingPullRequest.title;
+  const nextBody = request.body ?? existingPullRequest.body;
+  const nextDraft = request.draft ?? existingPullRequest.draft;
+
+  if (nextBaseBranch !== existingPullRequest.baseBranch) {
+    const queued = queuePullRequestSynchronization(
+      {
+        repositoryName: existingPullRequest.repositoryName,
+        repositoryPath: existingPullRequest.repositoryPath,
+        publishedBranch: {
+          repositoryPath: existingPullRequest.repositoryPath,
+          branchName: existingPullRequest.branchName,
+          commitHash: existingPullRequest.headCommitHash,
+          remoteName: existingPullRequest.remoteName ?? undefined,
+        },
+        pullRequest: {
+          repositoryPath: existingPullRequest.repositoryPath,
+          branchName: existingPullRequest.branchName,
+          baseBranch: nextBaseBranch,
+          title: nextTitle,
+          body: nextBody,
+          draft: nextDraft,
+          remoteName: existingPullRequest.remoteName ?? undefined,
+        },
+      },
+      options,
+    );
+
+    return {
+      pullRequest: queued.pullRequest,
+      latestJob: queued.job,
+      rerunJob: queued.job,
+      queuePosition: queued.queuePosition,
+    };
+  }
+
+  return withStorage(options.storage, (database) =>
+    runStorageTransaction(
+      database,
+      (transaction) => {
+        const now = (options.now ?? (() => new Date()))().toISOString();
+
+        transaction
+          .prepare<[string, string, string, number, string, number]>(
+            `
+              UPDATE pull_requests
+              SET
+                title = ?,
+                body = ?,
+                base_branch = ?,
+                draft = ?,
+                updated_at = ?
+              WHERE id = ?
+            `,
+          )
+          .run(nextTitle, nextBody, nextBaseBranch, nextDraft ? 1 : 0, now, existingPullRequest.id);
+
+        const pullRequest = readPullRequestById(transaction, existingPullRequest.id)!;
+        const latestJob = pullRequest.latestJobId
+          ? readCiJobById(transaction, pullRequest.latestJobId)
+          : null;
+
+        return {
+          pullRequest,
+          latestJob,
+          rerunJob: null,
+          queuePosition: null,
+        };
+      },
+      "immediate",
+    ),
+  );
+}
+
 export function readCiJob(
   jobId: string,
   storage: StorageOptions | string | undefined = undefined,
@@ -799,6 +999,14 @@ function readCiJobById(database: DatabaseSync, jobId: string): CiJobRecord | nul
   return row ? toCiJobRecord(row) : null;
 }
 
+function toPullRequestSummaryRecord(row: PullRequestSummaryRow): PullRequestSummaryRecord {
+  return {
+    pullRequest: toPullRequestRecord(row),
+    latestJob: toSummaryCiJobRecord(row),
+    state: row.status === "merged" ? "merged" : "open",
+  };
+}
+
 function toPullRequestRecord(row: PullRequestRow): PullRequestRecord {
   return {
     id: row.id,
@@ -815,6 +1023,31 @@ function toPullRequestRecord(row: PullRequestRow): PullRequestRecord {
     latestJobId: row.latest_job_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function toSummaryCiJobRecord(row: PullRequestSummaryRow): CiJobRecord | null {
+  if (row.ci_job_id === null) {
+    return null;
+  }
+
+  return {
+    id: row.ci_job_id,
+    pullRequestId: row.ci_pull_request_id!,
+    repositoryName: row.ci_repository_name!,
+    repositoryPath: row.ci_repository_path!,
+    branchName: row.ci_branch_name!,
+    baseBranch: row.ci_base_branch!,
+    commitHash: row.ci_commit_hash!,
+    remoteName: row.ci_remote_name,
+    status: row.ci_status!,
+    resultPath: row.ci_result_path,
+    errorMessage: row.ci_error_message,
+    mergeStatus: row.ci_merge_status,
+    createdAt: row.ci_created_at!,
+    updatedAt: row.ci_updated_at!,
+    startedAt: row.ci_started_at,
+    finishedAt: row.ci_finished_at,
   };
 }
 

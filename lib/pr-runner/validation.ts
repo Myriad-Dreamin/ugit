@@ -5,19 +5,20 @@ import path from "node:path";
 import { getRepositoriesRoot } from "@/lib/repositories";
 import type {
   GitPlatformPublishedBranch,
+  PullRequestListState,
   SynchronizeGitPlatformPullRequestArgs,
 } from "@/packages/ugit-cli/src/pull-request-contract";
 
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,64}$/i;
 
-export class PullRequestSyncError extends Error {
+export class PullRequestRequestError extends Error {
   constructor(
     message: string,
     readonly statusCode: number,
     options?: ErrorOptions,
   ) {
     super(message, options);
-    this.name = "PullRequestSyncError";
+    this.name = "PullRequestRequestError";
   }
 }
 
@@ -28,67 +29,121 @@ export type ValidatedPullRequestSyncRequest = Readonly<{
   repositoryPath: string;
 }>;
 
-export type ValidatePullRequestSyncRequestOptions = Readonly<{
+export type ValidatedPullRequestListRequest = Readonly<{
+  repositoryName: string;
+  repositoryPath: string;
+  state: PullRequestListState;
+  baseBranch?: string;
+  headBranch?: string;
+}>;
+
+export type ValidatedPullRequestEditRequest = Readonly<{
+  repositoryName: string;
+  repositoryPath: string;
+  branchName: string;
+  title?: string;
+  body?: string;
+  baseBranch?: string;
+  draft?: boolean;
+}>;
+
+export type ValidatePullRequestRequestOptions = Readonly<{
   cwd?: string;
 }>;
 
 export function validatePullRequestSyncRequest(
   payload: unknown,
-  options: ValidatePullRequestSyncRequestOptions = {},
+  options: ValidatePullRequestRequestOptions = {},
 ): ValidatedPullRequestSyncRequest {
-  const repositoriesRoot = getRepositoriesRoot(options.cwd);
   const request = asRecord(payload, "The pull-request synchronization payload");
   const publishedBranch = normalizePublishedBranch(request.publishedBranch);
   const pullRequest = normalizePullRequest(request.pullRequest);
+  const publishedRepositoryPath = path.normalize(publishedBranch.repositoryPath);
+  const pullRequestRepositoryPath = path.normalize(pullRequest.repositoryPath);
 
-  if (publishedBranch.repositoryPath !== pullRequest.repositoryPath) {
-    throw new PullRequestSyncError(
+  if (publishedRepositoryPath !== pullRequestRepositoryPath) {
+    throw new PullRequestRequestError(
       "Published branch and pull request must target the same repository.",
       400,
     );
   }
 
   if (publishedBranch.branchName !== pullRequest.branchName) {
-    throw new PullRequestSyncError(
+    throw new PullRequestRequestError(
       "Published branch and pull request must target the same branch.",
       400,
     );
   }
 
-  const repositoryPath = path.normalize(publishedBranch.repositoryPath);
-  const relativeRepositoryPath = path.relative(repositoriesRoot, repositoryPath);
-
-  if (
-    !path.isAbsolute(repositoryPath) ||
-    relativeRepositoryPath.startsWith("..") ||
-    path.isAbsolute(relativeRepositoryPath)
-  ) {
-    throw new PullRequestSyncError(
-      `Repository path ${repositoryPath} is outside the configured ugit repository root.`,
-      400,
-    );
-  }
-
-  const repositoryName = path.basename(repositoryPath);
-
-  if (!existsSync(path.join(repositoryPath, ".git"))) {
-    throw new PullRequestSyncError(
-      `ugit repository ${repositoryPath} does not exist on the server.`,
-      404,
-    );
-  }
+  const repository = normalizeRepositoryTarget(publishedRepositoryPath, options.cwd);
 
   return {
     publishedBranch: {
       ...publishedBranch,
-      repositoryPath,
+      repositoryPath: repository.repositoryPath,
     },
     pullRequest: {
       ...pullRequest,
-      repositoryPath,
+      repositoryPath: repository.repositoryPath,
     },
-    repositoryName,
-    repositoryPath,
+    repositoryName: repository.repositoryName,
+    repositoryPath: repository.repositoryPath,
+  };
+}
+
+export function validatePullRequestListRequest(
+  payload: unknown,
+  options: ValidatePullRequestRequestOptions = {},
+): ValidatedPullRequestListRequest {
+  const request = asRecord(payload, "The pull-request query payload");
+  const repository = normalizeRepositoryTarget(
+    readRequiredString(request.repositoryPath, "repositoryPath"),
+    options.cwd,
+  );
+
+  return {
+    ...repository,
+    state: readPullRequestState(request.state, "state") ?? "open",
+    baseBranch: readOptionalNonEmptyString(request.baseBranch, "baseBranch"),
+    headBranch: readOptionalNonEmptyString(request.headBranch, "headBranch"),
+  };
+}
+
+export function validatePullRequestEditRequest(
+  payload: unknown,
+  options: ValidatePullRequestRequestOptions = {},
+): ValidatedPullRequestEditRequest {
+  const request = asRecord(payload, "The pull-request edit payload");
+  const repository = normalizeRepositoryTarget(
+    readRequiredString(request.repositoryPath, "repositoryPath"),
+    options.cwd,
+  );
+  const branchName = readRequiredString(request.branchName, "branchName");
+  const baseBranch = readOptionalNonEmptyString(request.baseBranch, "baseBranch");
+  const title = readOptionalNonEmptyString(request.title, "title");
+  const body = readOptionalString(request.body, "body");
+  const draft = readOptionalBoolean(request.draft, "draft");
+
+  if (baseBranch === branchName) {
+    throw new PullRequestRequestError("Pull requests must target a different base branch.", 400);
+  }
+
+  if (
+    title === undefined &&
+    body === undefined &&
+    baseBranch === undefined &&
+    draft === undefined
+  ) {
+    throw new PullRequestRequestError("At least one editable field must be provided.", 400);
+  }
+
+  return {
+    ...repository,
+    branchName,
+    title,
+    body,
+    baseBranch,
+    draft,
   };
 }
 
@@ -102,7 +157,7 @@ function normalizePublishedBranch(value: unknown): GitPlatformPublishedBranch {
   const commitHash = readRequiredString(record.commitHash, "publishedBranch.commitHash");
 
   if (!COMMIT_HASH_PATTERN.test(commitHash)) {
-    throw new PullRequestSyncError(
+    throw new PullRequestRequestError(
       `publishedBranch.commitHash must be a hexadecimal Git revision. Received "${commitHash}".`,
       400,
     );
@@ -127,7 +182,7 @@ function normalizePullRequest(value: unknown): SynchronizeGitPlatformPullRequest
   const draft = readOptionalBoolean(record.draft, "pullRequest.draft");
 
   if (branchName === baseBranch) {
-    throw new PullRequestSyncError("Pull requests must target a different base branch.", 400);
+    throw new PullRequestRequestError("Pull requests must target a different base branch.", 400);
   }
 
   return {
@@ -141,9 +196,58 @@ function normalizePullRequest(value: unknown): SynchronizeGitPlatformPullRequest
   };
 }
 
+function normalizeRepositoryTarget(
+  repositoryPathValue: string,
+  cwd: string | undefined,
+): Readonly<{
+  repositoryName: string;
+  repositoryPath: string;
+}> {
+  const repositoriesRoot = getRepositoriesRoot(cwd);
+  const repositoryPath = path.normalize(repositoryPathValue);
+  const relativeRepositoryPath = path.relative(repositoriesRoot, repositoryPath);
+
+  if (
+    !path.isAbsolute(repositoryPath) ||
+    relativeRepositoryPath.startsWith("..") ||
+    path.isAbsolute(relativeRepositoryPath)
+  ) {
+    throw new PullRequestRequestError(
+      `Repository path ${repositoryPath} is outside the configured ugit repository root.`,
+      400,
+    );
+  }
+
+  if (!existsSync(path.join(repositoryPath, ".git"))) {
+    throw new PullRequestRequestError(
+      `ugit repository ${repositoryPath} does not exist on the server.`,
+      404,
+    );
+  }
+
+  return {
+    repositoryName: path.basename(repositoryPath),
+    repositoryPath,
+  };
+}
+
+function readPullRequestState(value: unknown, label: string): PullRequestListState | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const state = readString(value, label);
+
+  if (state === "open" || state === "merged" || state === "all") {
+    return state;
+  }
+
+  throw new PullRequestRequestError(`${label} must be one of "open", "merged", or "all".`, 400);
+}
+
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new PullRequestSyncError(`${label} must be a JSON object.`, 400);
+    throw new PullRequestRequestError(`${label} must be a JSON object.`, 400);
   }
 
   return value as Record<string, unknown>;
@@ -153,10 +257,18 @@ function readRequiredString(value: unknown, label: string): string {
   const stringValue = readString(value, label);
 
   if (stringValue.trim().length === 0) {
-    throw new PullRequestSyncError(`${label} must be a non-empty string.`, 400);
+    throw new PullRequestRequestError(`${label} must be a non-empty string.`, 400);
   }
 
   return stringValue;
+}
+
+function readOptionalNonEmptyString(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  return readRequiredString(value, label);
 }
 
 function readOptionalString(value: unknown, label: string): string | undefined {
@@ -169,7 +281,7 @@ function readOptionalString(value: unknown, label: string): string | undefined {
 
 function readString(value: unknown, label: string): string {
   if (typeof value !== "string") {
-    throw new PullRequestSyncError(`${label} must be a string.`, 400);
+    throw new PullRequestRequestError(`${label} must be a string.`, 400);
   }
 
   return value;
@@ -181,7 +293,7 @@ function readOptionalBoolean(value: unknown, label: string): boolean | undefined
   }
 
   if (typeof value !== "boolean") {
-    throw new PullRequestSyncError(`${label} must be a boolean when provided.`, 400);
+    throw new PullRequestRequestError(`${label} must be a boolean when provided.`, 400);
   }
 
   return value;
