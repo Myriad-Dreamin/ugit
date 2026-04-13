@@ -1,23 +1,22 @@
+import { getHomepageContent } from "@/lib/storage/homepage";
 import { listRepositories } from "@/lib/repositories";
 
 export const dynamic = "force-dynamic";
 
-export default function HomePage() {
+export default async function HomePage() {
+  const homepageContent = await getHomepageContent();
   const repositories = listRepositories();
 
   return (
     <main className="page-shell">
       <section className="hero-card" aria-labelledby="repositories-heading">
-        <p className="hero-eyebrow">ugit repositories</p>
+        <p className="hero-eyebrow">{homepageContent.eyebrow}</p>
         <h1 id="repositories-heading">
-          Local repositories, served from <code>.data/repos</code>
+          {homepageContent.title} <code>{homepageContent.repositoriesPath}</code>
         </h1>
-        <p className="hero-subtitle">
-          The server seeds a real example Git repository on demand and exposes the current
-          repository listing over HTTP.
-        </p>
+        <p className="hero-subtitle">{homepageContent.subtitle}</p>
         <p className="hero-note">
-          JSON endpoint: <code>/api/repositories</code>
+          {homepageContent.endpointLabel}: <code>{homepageContent.endpointPath}</code>
         </p>
         <div className="repositories-panel">
           <div className="repositories-header">

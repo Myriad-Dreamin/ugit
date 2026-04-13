@@ -18,11 +18,13 @@
     "format:check": "pnpm fmt:check"
   },
   "dependencies": {
+    "better-sqlite3": "12.8.0",
     "next": "16.1.6",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
     "@types/node": "22.19.13",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",

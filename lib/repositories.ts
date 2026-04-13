@@ -8,6 +8,13 @@ export type Repository = {
   relativePath: string;
 };
 
+export type RepositoryRootEntry = {
+  kind: "directory" | "file";
+  name: string;
+  path: string;
+  relativePath: string;
+};
+
 type RepositoryOptions = Readonly<{
   cwd?: string;
   runGit?: typeof execFileSync;
@@ -58,7 +65,21 @@ export function listRepositories(options: RepositoryOptions = {}): Repository[] 
     .map((entry) => path.join(repositoriesRoot, entry.name))
     .filter(hasGitEntry)
     .map((repositoryPath) => toRepository(repositoryPath, cwd))
-    .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+    .sort((left, right) => compareByRelativePath(left.relativePath, right.relativePath));
+}
+
+export function getRepositoryByName(
+  repositoryName: string,
+  options: RepositoryOptions = {},
+): Repository | null {
+  return listRepositories(options).find((repository) => repository.name === repositoryName) ?? null;
+}
+
+export function listRepositoryRootEntries(repository: Repository): RepositoryRootEntry[] {
+  return readdirSync(repository.path, { withFileTypes: true })
+    .filter((entry) => entry.name !== ".git")
+    .map((entry) => toRepositoryRootEntry(repository, entry.name, entry.isDirectory()))
+    .sort((left, right) => compareByRelativePath(left.relativePath, right.relativePath));
 }
 
 function hasGitEntry(repositoryPath: string): boolean {
@@ -87,4 +108,25 @@ function toRepository(repositoryPath: string, cwd: string): Repository {
     path: repositoryPath,
     relativePath: path.relative(cwd, repositoryPath),
   };
+}
+
+function toRepositoryRootEntry(
+  repository: Repository,
+  entryName: string,
+  isDirectory: boolean,
+): RepositoryRootEntry {
+  return {
+    kind: isDirectory ? "directory" : "file",
+    name: entryName,
+    path: path.join(repository.path, entryName),
+    relativePath: path.join(repository.relativePath, entryName),
+  };
+}
+
+function compareByRelativePath(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+
+  return left < right ? -1 : 1;
 }
