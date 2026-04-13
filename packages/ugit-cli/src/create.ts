@@ -331,7 +331,7 @@ function runRemoteShellCommand(
   command: string,
   runCommand: CommandRunner,
 ): string {
-  return runCommand("ssh", [sshMachine, "sh", "-lc", shellQuote(command)]);
+  return runCommand("ssh", [sshMachine, "sh", "-lc", command]);
 }
 
 function buildShellCommand(args: readonly string[]): string {

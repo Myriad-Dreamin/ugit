@@ -234,6 +234,36 @@ describe("createRepository", () => {
       cwd: repositoryPath,
     });
   });
+
+  it("runs ssh machine setup commands through sh -lc without double-quoting", () => {
+    const repositoryPath = createGitRepository();
+    const machineRoot = createWorkspace();
+    const upstreamUrl = "https://github.com/example/upstream.git";
+
+    git(repositoryPath, ["remote", "add", "upstream", upstreamUrl]);
+
+    const result = createRepository({
+      config: createRemoteConfig(machineRoot),
+      machineName: "machine-x",
+      directory: repositoryPath,
+      runCommand: runCommandWithLocalSsh,
+    });
+
+    expect(result).toEqual({
+      machineName: "machine-x",
+      repositoryName: path.basename(repositoryPath),
+      repositoryPath,
+      remoteRepositoryPath: path.join(machineRoot, ".data", "repos", path.basename(repositoryPath)),
+      originUrl: `ssh://kamiya-machine-x${path.join(machineRoot, ".data", "repos", path.basename(repositoryPath))}`,
+    });
+    expect(git(repositoryPath, ["remote", "get-url", "origin"])).toBe(result.originUrl);
+    expect(git(repositoryPath, ["config", "--local", "--get", "ugit.machine"])).toBe("machine-x");
+    expect(existsSync(path.join(result.remoteRepositoryPath, ".git", "HEAD"))).toBe(true);
+    expect(git(result.remoteRepositoryPath, ["remote", "get-url", "upstream"])).toBe(upstreamUrl);
+    expect(
+      git(result.remoteRepositoryPath, ["config", "--local", "--get", "receive.denyCurrentBranch"]),
+    ).toBe("updateInstead");
+  });
 });
 
 function createWorkspace(): string {
@@ -264,6 +294,24 @@ function git(repositoryPath: string, args: readonly string[]): string {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
+}
+
+function runCommandWithLocalSsh(
+  command: string,
+  args: readonly string[],
+  options: CommandRunnerOptions = {},
+): string {
+  const execOptions = {
+    cwd: options.cwd,
+    encoding: "utf8" as const,
+    stdio: ["ignore", "pipe", "pipe"] as const,
+  };
+
+  if (command === "ssh") {
+    return execFileSync("sh", [...args.slice(2)], execOptions).trim();
+  }
+
+  return execFileSync(command, [...args], execOptions).trim();
 }
 
 function createLocalConfig(machinePath: string): UgitConfig {
