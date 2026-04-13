@@ -1,5 +1,5 @@
 import { synchronizePullRequest } from "@/lib/pr-runner/service";
-import { PullRequestSyncError } from "@/lib/pr-runner/validation";
+import { PullRequestRequestError } from "@/lib/pr-runner/validation";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +24,7 @@ export async function POST(request: Request): Promise<Response> {
       status: 202,
     });
   } catch (error) {
-    if (error instanceof PullRequestSyncError) {
+    if (error instanceof PullRequestRequestError) {
       return Response.json(
         {
           error: error.message,

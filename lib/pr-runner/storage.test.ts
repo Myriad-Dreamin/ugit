@@ -6,14 +6,20 @@ import {
   SUPERSEDED_CI_JOB_MESSAGE,
   claimRunnableJobs,
   completeCiJob,
+  listPullRequests,
   queuePullRequestSynchronization,
   readCiJob,
   readPullRequest,
   requeueRunningJobs,
   selectRunnableJobs,
+  updatePullRequest,
 } from "@/lib/pr-runner/storage";
 import { resetStorageCacheForTests } from "@/lib/storage/sqlite";
-import type { ValidatedPullRequestSyncRequest } from "@/lib/pr-runner/validation";
+import {
+  PullRequestRequestError,
+  type ValidatedPullRequestEditRequest,
+  type ValidatedPullRequestSyncRequest,
+} from "@/lib/pr-runner/validation";
 
 const workspaces: string[] = [];
 
@@ -162,6 +168,276 @@ describe("stale job handling", () => {
   });
 });
 
+describe("listPullRequests", () => {
+  it("filters repository pull requests by state, base branch, and head branch", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = path.join(workspace, "repos", "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef1", "feature/open"), {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef2", "feature/merged"), {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      jobIdFactory: createJobIdFactory("job-2"),
+    });
+
+    completeCiJob({
+      jobId: "job-2",
+      status: "succeeded",
+      resultPath: "/tmp/job-2-result.json",
+      mergeStatus: "succeeded",
+      now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      storage,
+    });
+
+    expect(listPullRequests(repositoryPath, { storage, state: "open" })).toEqual([
+      expect.objectContaining({
+        pullRequest: expect.objectContaining({
+          branchName: "feature/open",
+          status: "queued",
+        }),
+        latestJob: expect.objectContaining({
+          id: "job-1",
+          status: "queued",
+        }),
+        state: "open",
+      }),
+    ]);
+    expect(
+      listPullRequests(repositoryPath, {
+        storage,
+        state: "merged",
+        baseBranch: "main",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        pullRequest: expect.objectContaining({
+          branchName: "feature/merged",
+          status: "merged",
+        }),
+        latestJob: expect.objectContaining({
+          id: "job-2",
+          status: "succeeded",
+        }),
+        state: "merged",
+      }),
+    ]);
+    expect(
+      listPullRequests(repositoryPath, {
+        storage,
+        state: "all",
+        headBranch: "feature/open",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        pullRequest: expect.objectContaining({
+          branchName: "feature/open",
+        }),
+      }),
+    ]);
+  });
+});
+
+describe("updatePullRequest", () => {
+  it("updates pull-request metadata without queuing a new CI job", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = path.join(workspace, "repos", "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef1"), {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    const updated = updatePullRequest(
+      createEditRequest(repositoryPath, {
+        title: "Retitle the pull request",
+        body: "",
+        draft: true,
+      }),
+      {
+        storage,
+        now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      },
+    );
+
+    expect(updated).toEqual({
+      pullRequest: expect.objectContaining({
+        title: "Retitle the pull request",
+        body: "",
+        draft: true,
+        latestJobId: "job-1",
+      }),
+      latestJob: expect.objectContaining({
+        id: "job-1",
+        status: "queued",
+      }),
+      rerunJob: null,
+      queuePosition: null,
+    });
+    expect(readCiJob("job-1", storage)).toMatchObject({
+      id: "job-1",
+      status: "queued",
+    });
+  });
+
+  it("reuses the sync queue when the base branch changes", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = path.join(workspace, "repos", "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef1"), {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    const updated = updatePullRequest(
+      createEditRequest(repositoryPath, {
+        baseBranch: "release",
+        title: "Retarget the pull request",
+      }),
+      {
+        storage,
+        now: createNowFactory("2026-04-14T00:00:10.000Z"),
+        jobIdFactory: createJobIdFactory("job-2"),
+      },
+    );
+
+    expect(updated).toEqual({
+      pullRequest: expect.objectContaining({
+        baseBranch: "release",
+        title: "Retarget the pull request",
+        latestJobId: "job-2",
+        status: "queued",
+      }),
+      latestJob: expect.objectContaining({
+        id: "job-2",
+        status: "queued",
+        commitHash: "abcdef1",
+      }),
+      rerunJob: expect.objectContaining({
+        id: "job-2",
+        status: "queued",
+      }),
+      queuePosition: 1,
+    });
+    expect(readCiJob("job-1", storage)).toMatchObject({
+      id: "job-1",
+      status: "superseded",
+    });
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      baseBranch: "release",
+      latestJobId: "job-2",
+    });
+  });
+
+  it("rejects retargeting a merged pull request", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = path.join(workspace, "repos", "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef1"), {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "succeeded",
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      storage,
+    });
+
+    try {
+      updatePullRequest(
+        createEditRequest(repositoryPath, {
+          baseBranch: "release",
+          title: "Do not reopen this merged PR",
+        }),
+        {
+          storage,
+          now: createNowFactory("2026-04-14T00:00:20.000Z"),
+          jobIdFactory: createJobIdFactory("job-2"),
+        },
+      );
+
+      throw new Error("Expected merged PR retarget to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PullRequestRequestError);
+      expect((error as PullRequestRequestError).statusCode).toBe(409);
+      expect((error as Error).message).toBe("Merged pull requests cannot change base branches.");
+    }
+
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      baseBranch: "main",
+      latestJobId: "job-1",
+      status: "merged",
+      title: "Sync feature/test",
+    });
+    expect(readCiJob("job-1", storage)).toMatchObject({
+      id: "job-1",
+      status: "succeeded",
+    });
+    expect(readCiJob("job-2", storage)).toBeNull();
+  });
+
+  it("rejects synchronizing a merged pull request", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = path.join(workspace, "repos", "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef1"), {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "succeeded",
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      storage,
+    });
+
+    try {
+      queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef2"), {
+        storage,
+        now: createNowFactory("2026-04-14T00:00:20.000Z"),
+        jobIdFactory: createJobIdFactory("job-2"),
+      });
+
+      throw new Error("Expected merged PR sync to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PullRequestRequestError);
+      expect((error as PullRequestRequestError).statusCode).toBe(409);
+      expect((error as Error).message).toBe("Merged pull requests cannot be synchronized.");
+    }
+
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      headCommitHash: "abcdef1",
+      latestJobId: "job-1",
+      status: "merged",
+    });
+    expect(readCiJob("job-1", storage)).toMatchObject({
+      id: "job-1",
+      status: "succeeded",
+    });
+    expect(readCiJob("job-2", storage)).toBeNull();
+  });
+});
+
 function createWorkspace(): string {
   const workspace = mkdtempSync(path.join(os.tmpdir(), "ugit-pr-storage-"));
 
@@ -193,6 +469,27 @@ function createRequest(
       draft: false,
       remoteName: "origin",
     },
+  };
+}
+
+function createEditRequest(
+  repositoryPath: string,
+  updates: Readonly<{
+    title?: string;
+    body?: string;
+    baseBranch?: string;
+    draft?: boolean;
+  }>,
+  branchName: string = "feature/test",
+): ValidatedPullRequestEditRequest {
+  return {
+    repositoryName: path.basename(repositoryPath),
+    repositoryPath,
+    branchName,
+    title: updates.title,
+    body: updates.body,
+    baseBranch: updates.baseBranch,
+    draft: updates.draft,
   };
 }
 

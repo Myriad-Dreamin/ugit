@@ -1,23 +1,23 @@
 import { Command, Option } from "clipanion";
-import { synchronizePullRequest } from "../pr";
+import { createPullRequest } from "../pr";
 import { resolveConfiguredMachine } from "../machine";
 
-export class PullRequestSyncCommand extends Command {
-  static paths = [["pr", "sync"]];
+export class PullRequestCreateCommand extends Command {
+  static paths = [["pr", "create"]];
 
   static usage = Command.Usage({
     category: "Pull Request",
-    description: "Republish the current branch and rerun CI for an existing ugit pull request.",
+    description: "Create a new ugit pull request from the current branch.",
     details:
-      "Use this after new commits land on a branch that already has a ugit pull request. It pushes to the ugit origin, synchronizes pull-request metadata, and queues CI over HTTP-over-SSH.",
+      "Rejects duplicate pull requests for the current branch, then pushes to the ugit origin, records pull-request metadata, and queues CI on the remote server.",
     examples: [
       [
-        "Republish the current branch and queue CI against main",
-        'ugit pr sync --base main --title "Add the runner" --body "Re-run CI after more commits."',
+        "Create a pull request against main",
+        'ugit pr create --base main --title "Add the runner" --body "Implements the first PR runner slice."',
       ],
       [
-        "Override the inferred target machine",
-        'ugit pr sync -m machine-x --base release --title "Cherry-pick fix" --body ""',
+        "Create a draft pull request on another machine",
+        'ugit pr create -m machine-x --base release --title "Cherry-pick fix" --draft',
       ],
     ],
   });
@@ -42,13 +42,7 @@ export class PullRequestSyncCommand extends Command {
   });
 
   draft = Option.Boolean("--draft", false, {
-    description: "Mark the synchronized pull request as a draft.",
-  });
-
-  port = Option.String("-p,--port", {
-    description:
-      "Optional local port used for the temporary SSH tunnel. Defaults to an ephemeral port for remote machines.",
-    required: false,
+    description: "Mark the new pull request as a draft.",
   });
 
   directory = Option.String({
@@ -62,24 +56,17 @@ export class PullRequestSyncCommand extends Command {
       directory: this.directory ?? undefined,
       requireRepository: true,
     });
-    const localPort = this.port ? Number.parseInt(this.port, 10) : undefined;
-
-    if (this.port && (!Number.isInteger(localPort) || Number(localPort) <= 0)) {
-      throw new Error(`Invalid local port "${this.port}". Expected a positive integer.`);
-    }
-
-    const result = await synchronizePullRequest({
+    const result = await createPullRequest({
       machine: resolved.machine,
       repositoryPath: resolved.repositoryPath!,
       baseBranch: this.baseBranch,
       title: this.title,
       body: this.body,
       draft: this.draft,
-      localPort,
     });
 
     this.context.stdout.write(
-      `Synchronized ${result.response.repositoryName}:${result.response.branchName} -> ${result.response.baseBranch}.\n`,
+      `Created pull request #${result.response.pullRequestId} for ${result.response.repositoryName}:${result.response.branchName} -> ${result.response.baseBranch}.\n`,
     );
     this.context.stdout.write(
       `CI job ${result.response.jobId} is ${result.response.status} (queue position ${result.response.queuePosition}).\n`,

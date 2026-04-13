@@ -2,7 +2,11 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { validatePullRequestSyncRequest } from "@/lib/pr-runner/validation";
+import {
+  validatePullRequestEditRequest,
+  validatePullRequestListRequest,
+  validatePullRequestSyncRequest,
+} from "@/lib/pr-runner/validation";
 
 const workspaces: string[] = [];
 
@@ -89,6 +93,87 @@ describe("validatePullRequestSyncRequest", () => {
     ).toThrow(
       `Repository path ${path.normalize(outsideRepositoryPath)} is outside the configured ugit repository root.`,
     );
+  });
+});
+
+describe("validatePullRequestListRequest", () => {
+  it("defaults the list state to open and normalizes repository filters", () => {
+    const cwd = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(cwd, "alpha");
+
+    expect(
+      validatePullRequestListRequest(
+        {
+          repositoryPath,
+          headBranch: "feature/test",
+        },
+        { cwd },
+      ),
+    ).toEqual({
+      repositoryName: "alpha",
+      repositoryPath,
+      state: "open",
+      baseBranch: undefined,
+      headBranch: "feature/test",
+    });
+  });
+
+  it("rejects invalid list state filters", () => {
+    const cwd = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(cwd, "alpha");
+
+    expect(() =>
+      validatePullRequestListRequest(
+        {
+          repositoryPath,
+          state: "closed",
+        },
+        { cwd },
+      ),
+    ).toThrow('state must be one of "open", "merged", or "all".');
+  });
+});
+
+describe("validatePullRequestEditRequest", () => {
+  it("accepts metadata-only pull-request edits", () => {
+    const cwd = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(cwd, "alpha");
+
+    expect(
+      validatePullRequestEditRequest(
+        {
+          repositoryPath,
+          branchName: "feature/test",
+          title: "Refine the runner logs",
+          body: "",
+          draft: true,
+        },
+        { cwd },
+      ),
+    ).toEqual({
+      repositoryName: "alpha",
+      repositoryPath,
+      branchName: "feature/test",
+      title: "Refine the runner logs",
+      body: "",
+      baseBranch: undefined,
+      draft: true,
+    });
+  });
+
+  it("requires at least one editable field", () => {
+    const cwd = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(cwd, "alpha");
+
+    expect(() =>
+      validatePullRequestEditRequest(
+        {
+          repositoryPath,
+          branchName: "feature/test",
+        },
+        { cwd },
+      ),
+    ).toThrow("At least one editable field must be provided.");
   });
 });
 
