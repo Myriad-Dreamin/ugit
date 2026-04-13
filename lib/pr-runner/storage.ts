@@ -14,6 +14,8 @@ import type {
   ValidatedPullRequestSyncRequest,
 } from "./validation";
 import { PullRequestRequestError } from "./validation";
+import { getWorkflowRunLogPath } from "@/lib/workflow-runs/log-storage";
+import type { ValidatedWorkflowRunRequest } from "@/lib/workflow-runs/validation";
 
 export const MAX_ACTIVE_CI_JOBS = 4;
 export const SUPERSEDED_CI_JOB_MESSAGE =
@@ -27,6 +29,7 @@ export type CiJobStatus =
   | "failed"
   | "merge_failed"
   | "superseded";
+export type WorkflowRunStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type PullRequestRecord = Readonly<{
   id: number;
@@ -77,10 +80,47 @@ export type ClaimedCiJob = Readonly<{
   startedAt: string | null;
 }>;
 
+export type WorkflowRunRecord = Readonly<{
+  id: string;
+  repositoryName: string;
+  repositoryPath: string;
+  branchName: string;
+  commitHash: string;
+  workflowName: string;
+  status: WorkflowRunStatus;
+  logPath: string;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}>;
+
+export type ClaimedWorkflowRun = Readonly<{
+  id: string;
+  repositoryName: string;
+  repositoryPath: string;
+  branchName: string;
+  commitHash: string;
+  workflowName: string;
+  logPath: string;
+  createdAt: string;
+  startedAt: string | null;
+}>;
+
+export type ClaimedExecution =
+  | (ClaimedCiJob & { kind: "pull_request" })
+  | (ClaimedWorkflowRun & { kind: "workflow_run" });
+
 export type QueuePullRequestResult = Readonly<{
   job: CiJobRecord;
   pullRequest: PullRequestRecord;
   queuePosition: number;
+}>;
+
+export type QueueWorkflowRunResult = Readonly<{
+  queuePosition: number;
+  workflowRun: WorkflowRunRecord;
 }>;
 
 export type PullRequestState = "open" | "merged";
@@ -132,9 +172,20 @@ export type CompleteCiJobOptions = Readonly<{
   storage?: StorageOptions | string;
 }>;
 
-type CountRow = {
-  total: number;
-};
+export type QueueWorkflowRunOptions = Readonly<{
+  cwd?: string;
+  now?: () => Date;
+  storage?: StorageOptions | string;
+  workflowIdFactory?: () => string;
+}>;
+
+export type CompleteWorkflowRunOptions = Readonly<{
+  workflowId: string;
+  status: Exclude<WorkflowRunStatus, "queued" | "running">;
+  errorMessage?: string | null;
+  now?: () => Date;
+  storage?: StorageOptions | string;
+}>;
 
 type PullRequestRow = {
   id: number;
@@ -172,6 +223,22 @@ type CiJobRow = {
   finished_at: string | null;
 };
 
+type WorkflowRunRow = {
+  id: string;
+  repository_name: string;
+  repository_path: string;
+  branch_name: string;
+  commit_hash: string;
+  workflow_name: string;
+  status: WorkflowRunStatus;
+  log_path: string;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 type PullRequestSummaryRow = PullRequestRow & {
   ci_job_id: string | null;
   ci_pull_request_id: number | null;
@@ -189,6 +256,21 @@ type PullRequestSummaryRow = PullRequestRow & {
   ci_updated_at: string | null;
   ci_started_at: string | null;
   ci_finished_at: string | null;
+};
+
+type RunnableExecutionRow = {
+  id: string;
+  branch_name: string;
+  commit_hash: string;
+  created_at: string;
+  kind: "pull_request" | "workflow_run";
+  log_path: string | null;
+  pull_request_id: number | null;
+  remote_name: string | null;
+  repository_name: string;
+  repository_path: string;
+  workflow_name: string | null;
+  base_branch: string | null;
 };
 
 const MIGRATIONS: readonly StorageMigration[] = [
@@ -236,6 +318,34 @@ const MIGRATIONS: readonly StorageMigration[] = [
 
         CREATE INDEX ci_jobs_status_created_idx ON ci_jobs(status, created_at, id);
         CREATE INDEX ci_jobs_repository_status_idx ON ci_jobs(repository_path, status, created_at, id);
+      `);
+    },
+  },
+  {
+    version: 2,
+    name: "create_workflow_runs",
+    up(database) {
+      database.exec(`
+        CREATE TABLE workflow_runs (
+          id TEXT PRIMARY KEY,
+          repository_name TEXT NOT NULL,
+          repository_path TEXT NOT NULL,
+          branch_name TEXT NOT NULL,
+          commit_hash TEXT NOT NULL,
+          workflow_name TEXT NOT NULL,
+          status TEXT NOT NULL,
+          log_path TEXT NOT NULL,
+          error_message TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT
+        );
+
+        CREATE INDEX workflow_runs_status_created_idx
+          ON workflow_runs(status, created_at, id);
+        CREATE INDEX workflow_runs_repository_status_idx
+          ON workflow_runs(repository_path, status, created_at, id);
       `);
     },
   },
@@ -438,24 +548,84 @@ export function queuePullRequestSynchronization(
           )
           .run(jobId, "queued", now, pullRequestId);
 
-        const queuePosition =
-          (transaction
-            .prepare<[string, string, string], CountRow>(
-              `
-                SELECT COUNT(*) AS total
-                FROM ci_jobs
-                WHERE status = 'queued'
-                  AND (created_at < ? OR (created_at = ? AND id <= ?))
-              `,
-            )
-            .get(now, now, jobId)?.total ??
-            1) ||
-          1;
+        const queuePosition = countQueuedExecutionsThrough(transaction, "pull_request", jobId);
 
         return {
           job: readCiJobById(transaction, jobId)!,
           pullRequest: readPullRequestById(transaction, pullRequestId)!,
           queuePosition,
+        };
+      },
+      "immediate",
+    ),
+  );
+}
+
+export function queueWorkflowRun(
+  request: ValidatedWorkflowRunRequest,
+  options: QueueWorkflowRunOptions = {},
+): QueueWorkflowRunResult {
+  ensurePullRequestStorage(options.storage);
+
+  return withStorage(options.storage, (database) =>
+    runStorageTransaction(
+      database,
+      (transaction) => {
+        const now = (options.now ?? (() => new Date()))().toISOString();
+        const workflowId = (options.workflowIdFactory ?? randomUUID)();
+        const logPath = getWorkflowRunLogPath(
+          workflowId,
+          request.repositoryName,
+          options.cwd ?? process.cwd(),
+        );
+
+        transaction
+          .prepare<
+            [
+              string,
+              string,
+              string,
+              string,
+              string,
+              string,
+              WorkflowRunStatus,
+              string,
+              string,
+              string,
+            ]
+          >(
+            `
+              INSERT INTO workflow_runs (
+                id,
+                repository_name,
+                repository_path,
+                branch_name,
+                commit_hash,
+                workflow_name,
+                status,
+                log_path,
+                created_at,
+                updated_at
+              )
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `,
+          )
+          .run(
+            workflowId,
+            request.repositoryName,
+            request.repositoryPath,
+            request.publishedBranch.branchName,
+            request.publishedBranch.commitHash,
+            request.workflowName,
+            "queued",
+            logPath,
+            now,
+            now,
+          );
+
+        return {
+          queuePosition: countQueuedExecutionsThrough(transaction, "workflow_run", workflowId),
+          workflowRun: readWorkflowRunById(transaction, workflowId)!,
         };
       },
       "immediate",
@@ -557,6 +727,122 @@ export function claimRunnableJobs(options: ClaimRunnableJobsOptions = {}): reado
   );
 }
 
+export function claimRunnableExecutions(
+  options: ClaimRunnableJobsOptions = {},
+): readonly ClaimedExecution[] {
+  ensurePullRequestStorage(options.storage);
+
+  return withStorage(options.storage, (database) =>
+    runStorageTransaction(
+      database,
+      (transaction) => {
+        const runningExecutions = listRunningExecutionRepositoryPaths(transaction);
+        const runningRepositoryPaths = new Set(
+          runningExecutions.map((execution) => execution.repository_path),
+        );
+        const availableSlots = Math.max(MAX_ACTIVE_CI_JOBS - runningExecutions.length, 0);
+
+        if (availableSlots === 0) {
+          return [];
+        }
+
+        const selectedExecutions = selectRunnableJobs(
+          listQueuedExecutionRows(transaction),
+          runningRepositoryPaths,
+          availableSlots,
+        );
+
+        if (selectedExecutions.length === 0) {
+          return [];
+        }
+
+        const timestamp = (options.now ?? (() => new Date()))().toISOString();
+        const claimedExecutions: ClaimedExecution[] = [];
+
+        for (const execution of selectedExecutions) {
+          if (execution.kind === "pull_request") {
+            const updateResult = transaction
+              .prepare<[string, string, string]>(
+                `
+                  UPDATE ci_jobs
+                  SET
+                    status = 'running',
+                    started_at = COALESCE(started_at, ?),
+                    updated_at = ?
+                  WHERE id = ? AND status = 'queued'
+                `,
+              )
+              .run(timestamp, timestamp, execution.id);
+
+            if (updateResult.changes === 0 || execution.pull_request_id === null) {
+              continue;
+            }
+
+            transaction
+              .prepare<[PullRequestStatus, string, number]>(
+                `
+                  UPDATE pull_requests
+                  SET status = ?, updated_at = ?
+                  WHERE id = ?
+                `,
+              )
+              .run("running", timestamp, execution.pull_request_id);
+
+            claimedExecutions.push({
+              kind: "pull_request",
+              id: execution.id,
+              pullRequestId: execution.pull_request_id,
+              repositoryName: execution.repository_name,
+              repositoryPath: execution.repository_path,
+              branchName: execution.branch_name,
+              baseBranch: execution.base_branch ?? "",
+              commitHash: execution.commit_hash,
+              remoteName: execution.remote_name,
+              createdAt: execution.created_at,
+              startedAt: timestamp,
+            });
+
+            continue;
+          }
+
+          const updateResult = transaction
+            .prepare<[string, string, string]>(
+              `
+                UPDATE workflow_runs
+                SET
+                  status = 'running',
+                  started_at = COALESCE(started_at, ?),
+                  updated_at = ?
+                WHERE id = ? AND status = 'queued'
+              `,
+            )
+            .run(timestamp, timestamp, execution.id);
+
+          if (updateResult.changes === 0 || !execution.workflow_name || !execution.log_path) {
+            continue;
+          }
+
+          claimedExecutions.push({
+            kind: "workflow_run",
+            id: execution.id,
+            repositoryName: execution.repository_name,
+            repositoryPath: execution.repository_path,
+            branchName: execution.branch_name,
+            commitHash: execution.commit_hash,
+            workflowName: execution.workflow_name,
+            logPath: execution.log_path,
+            createdAt: execution.created_at,
+            startedAt: timestamp,
+          });
+        }
+
+        return claimedExecutions;
+      },
+      "immediate",
+    ),
+  );
+}
+
 export function selectRunnableJobs<T extends Pick<CiJobRow, "repository_path">>(
   queuedJobs: readonly T[],
   runningRepositoryPaths: ReadonlySet<string>,
@@ -592,7 +878,7 @@ export function requeueRunningJobs(
       database,
       (transaction) => {
         const timestamp = now().toISOString();
-        const updateResult = transaction
+        const requeuedCiJobs = transaction
           .prepare<[string]>(
             `
               UPDATE ci_jobs
@@ -608,8 +894,24 @@ export function requeueRunningJobs(
             `,
           )
           .run(timestamp);
+        const requeuedWorkflowRuns = transaction
+          .prepare<[string]>(
+            `
+              UPDATE workflow_runs
+              SET
+                status = 'queued',
+                started_at = NULL,
+                updated_at = ?,
+                error_message = CASE
+                  WHEN error_message IS NULL THEN 'Runner restarted before completion; workflow run requeued.'
+                  ELSE error_message || CHAR(10) || 'Runner restarted before completion; workflow run requeued.'
+                END
+              WHERE status = 'running'
+            `,
+          )
+          .run(timestamp);
 
-        if (updateResult.changes > 0) {
+        if (requeuedCiJobs.changes > 0) {
           transaction
             .prepare<[string, string, string, string, string]>(
               `
@@ -653,7 +955,7 @@ export function requeueRunningJobs(
             .run("queued", timestamp);
         }
 
-        return updateResult.changes;
+        return requeuedCiJobs.changes + requeuedWorkflowRuns.changes;
       },
       "immediate",
     ),
@@ -724,6 +1026,41 @@ export function completeCiJob(options: CompleteCiJobOptions): CiJobRecord {
   );
 }
 
+export function completeWorkflowRun(options: CompleteWorkflowRunOptions): WorkflowRunRecord {
+  ensurePullRequestStorage(options.storage);
+
+  return withStorage(options.storage, (database) =>
+    runStorageTransaction(
+      database,
+      (transaction) => {
+        const now = (options.now ?? (() => new Date()))().toISOString();
+        const workflowRun = readWorkflowRunById(transaction, options.workflowId);
+
+        if (!workflowRun) {
+          throw new Error(`Unknown workflow run ${options.workflowId}.`);
+        }
+
+        transaction
+          .prepare<[WorkflowRunStatus, string | null, string, string, string]>(
+            `
+              UPDATE workflow_runs
+              SET
+                status = ?,
+                error_message = ?,
+                finished_at = ?,
+                updated_at = ?
+              WHERE id = ?
+            `,
+          )
+          .run(options.status, options.errorMessage ?? null, now, now, options.workflowId);
+
+        return readWorkflowRunById(transaction, options.workflowId)!;
+      },
+      "immediate",
+    ),
+  );
+}
+
 export function isLatestCiJob(
   jobId: string,
   storage: StorageOptions | string | undefined = undefined,
@@ -751,6 +1088,15 @@ export function readPullRequest(
   return withStorage(storage, (database) =>
     readPullRequestByRepositoryBranch(database, repositoryPath, branchName),
   );
+}
+
+export function readWorkflowRun(
+  workflowId: string,
+  storage: StorageOptions | string | undefined = undefined,
+): WorkflowRunRecord | null {
+  ensurePullRequestStorage(storage);
+
+  return withStorage(storage, (database) => readWorkflowRunById(database, workflowId));
 }
 
 export function listPullRequests(
@@ -1010,6 +1356,126 @@ function readCiJobById(database: DatabaseSync, jobId: string): CiJobRecord | nul
   return row ? toCiJobRecord(row) : null;
 }
 
+function readWorkflowRunById(database: DatabaseSync, workflowId: string): WorkflowRunRecord | null {
+  const row = database
+    .prepare<[string], WorkflowRunRow>(
+      `
+        SELECT *
+        FROM workflow_runs
+        WHERE id = ?
+      `,
+    )
+    .get(workflowId);
+
+  return row ? toWorkflowRunRecord(row) : null;
+}
+
+function listRunningExecutionRepositoryPaths(
+  database: DatabaseSync,
+): readonly Pick<RunnableExecutionRow, "repository_path">[] {
+  const runningCiJobs = database
+    .prepare<[], Pick<CiJobRow, "repository_path">>(
+      `
+        SELECT repository_path
+        FROM ci_jobs
+        WHERE status = 'running'
+      `,
+    )
+    .all();
+  const runningWorkflowRuns = database
+    .prepare<[], Pick<WorkflowRunRow, "repository_path">>(
+      `
+        SELECT repository_path
+        FROM workflow_runs
+        WHERE status = 'running'
+      `,
+    )
+    .all();
+
+  return [...runningCiJobs, ...runningWorkflowRuns];
+}
+
+function listQueuedExecutionRows(database: DatabaseSync): readonly RunnableExecutionRow[] {
+  const queuedCiJobs = database
+    .prepare<[], CiJobRow>(
+      `
+        SELECT ci_jobs.*
+        FROM ci_jobs
+        INNER JOIN pull_requests ON pull_requests.id = ci_jobs.pull_request_id
+        WHERE ci_jobs.status = 'queued'
+          AND pull_requests.latest_job_id = ci_jobs.id
+      `,
+    )
+    .all()
+    .map<RunnableExecutionRow>((job) => ({
+      id: job.id,
+      branch_name: job.branch_name,
+      commit_hash: job.commit_hash,
+      created_at: job.created_at,
+      kind: "pull_request",
+      log_path: null,
+      pull_request_id: job.pull_request_id,
+      remote_name: job.remote_name,
+      repository_name: job.repository_name,
+      repository_path: job.repository_path,
+      workflow_name: null,
+      base_branch: job.base_branch,
+    }));
+  const queuedWorkflowRuns = database
+    .prepare<[], WorkflowRunRow>(
+      `
+        SELECT *
+        FROM workflow_runs
+        WHERE status = 'queued'
+      `,
+    )
+    .all()
+    .map<RunnableExecutionRow>((workflowRun) => ({
+      id: workflowRun.id,
+      branch_name: workflowRun.branch_name,
+      commit_hash: workflowRun.commit_hash,
+      created_at: workflowRun.created_at,
+      kind: "workflow_run",
+      log_path: workflowRun.log_path,
+      pull_request_id: null,
+      remote_name: null,
+      repository_name: workflowRun.repository_name,
+      repository_path: workflowRun.repository_path,
+      workflow_name: workflowRun.workflow_name,
+      base_branch: null,
+    }));
+
+  return [...queuedCiJobs, ...queuedWorkflowRuns].sort(compareQueuedExecutionRows);
+}
+
+function countQueuedExecutionsThrough(
+  database: DatabaseSync,
+  kind: RunnableExecutionRow["kind"],
+  id: string,
+): number {
+  const queuedExecutions = listQueuedExecutionRows(database);
+  const queueIndex = queuedExecutions.findIndex(
+    (execution) => execution.kind === kind && execution.id === id,
+  );
+
+  return queueIndex === -1 ? 1 : queueIndex + 1;
+}
+
+function compareQueuedExecutionRows(
+  left: RunnableExecutionRow,
+  right: RunnableExecutionRow,
+): number {
+  if (left.created_at !== right.created_at) {
+    return left.created_at.localeCompare(right.created_at);
+  }
+
+  return buildExecutionSortKey(left).localeCompare(buildExecutionSortKey(right));
+}
+
+function buildExecutionSortKey(row: Pick<RunnableExecutionRow, "kind" | "id">): string {
+  return `${row.kind}:${row.id}`;
+}
+
 function toPullRequestSummaryRecord(row: PullRequestSummaryRow): PullRequestSummaryRecord {
   return {
     pullRequest: toPullRequestRecord(row),
@@ -1076,6 +1542,24 @@ function toCiJobRecord(row: CiJobRow): CiJobRecord {
     resultPath: row.result_path,
     errorMessage: row.error_message,
     mergeStatus: row.merge_status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function toWorkflowRunRecord(row: WorkflowRunRow): WorkflowRunRecord {
+  return {
+    id: row.id,
+    repositoryName: row.repository_name,
+    repositoryPath: row.repository_path,
+    branchName: row.branch_name,
+    commitHash: row.commit_hash,
+    workflowName: row.workflow_name,
+    status: row.status,
+    logPath: row.log_path,
+    errorMessage: row.error_message,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     startedAt: row.started_at,

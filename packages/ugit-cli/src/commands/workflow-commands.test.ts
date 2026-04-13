@@ -1,0 +1,122 @@
+import { PassThrough } from "node:stream";
+import { Cli } from "clipanion";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { mockedResolveConfiguredMachine } = vi.hoisted(() => ({
+  mockedResolveConfiguredMachine: vi.fn(),
+}));
+
+const { mockedQueueWorkflowRun, mockedStreamWorkflowLogs } = vi.hoisted(() => ({
+  mockedQueueWorkflowRun: vi.fn(),
+  mockedStreamWorkflowLogs: vi.fn(),
+}));
+
+vi.mock("../machine", () => ({
+  resolveConfiguredMachine: mockedResolveConfiguredMachine,
+}));
+
+vi.mock("../workflow", () => ({
+  queueWorkflowRun: mockedQueueWorkflowRun,
+  streamWorkflowLogs: mockedStreamWorkflowLogs,
+}));
+
+import { createCli } from "../cli";
+
+const machine = {
+  name: "machine-x",
+  sshMachine: "machine-x",
+  path: "/srv/ugit",
+  serverPort: 3001,
+  isLocal: false,
+  repositoriesRoot: "/srv/ugit/.data/repos",
+};
+
+beforeEach(() => {
+  mockedResolveConfiguredMachine.mockReset();
+  mockedQueueWorkflowRun.mockReset();
+  mockedStreamWorkflowLogs.mockReset();
+  mockedResolveConfiguredMachine.mockReturnValue({
+    machine,
+    repositoryPath: "/work/alpha",
+    source: "git-config",
+  });
+});
+
+describe("workflow commands", () => {
+  it("parses workflow run options and reports the queued workflow id", async () => {
+    mockedQueueWorkflowRun.mockResolvedValue({
+      response: {
+        workflowId: "workflow-1",
+        workflowName: "lint",
+        status: "queued",
+        queuePosition: 2,
+        repositoryName: "alpha",
+        branchName: "feature/test",
+        commitHash: "abcdef1",
+      },
+    });
+
+    const { exitCode, stdout } = await runCli(["workflow", "run", "--port", "4301", "lint", "."]);
+
+    expect(exitCode).toBe(0);
+    expect(mockedQueueWorkflowRun).toHaveBeenCalledWith({
+      machine,
+      repositoryPath: "/work/alpha",
+      workflowName: "lint",
+      localPort: 4301,
+    });
+    expect(stdout).toContain("Queued workflow workflow-1");
+    expect(stdout).toContain("queue position 2");
+  });
+
+  it("parses workflow logs options and streams output", async () => {
+    const { exitCode } = await runCli([
+      "workflow",
+      "logs",
+      "-m",
+      "machine-x",
+      "--port",
+      "4301",
+      "workflow-1",
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(mockedStreamWorkflowLogs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        machine,
+        workflowId: "workflow-1",
+        localPort: 4301,
+      }),
+    );
+  });
+});
+
+async function runCli(argv: string[]): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  let stdoutText = "";
+  let stderrText = "";
+
+  stdout.on("data", (chunk) => {
+    stdoutText += chunk.toString();
+  });
+  stderr.on("data", (chunk) => {
+    stderrText += chunk.toString();
+  });
+
+  const exitCode = await createCli().run(argv, {
+    ...Cli.defaultContext,
+    stdout,
+    stderr,
+  });
+
+  return {
+    exitCode,
+    stdout: stdoutText,
+    stderr: stderrText,
+  };
+}
