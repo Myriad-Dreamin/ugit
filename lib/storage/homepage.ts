@@ -40,7 +40,7 @@ const DEFAULT_HOMEPAGE_CONTENT: HomepageContentInput = {
   endpointPath: "/api/repositories",
   repositoriesPath: ".data/repos",
   subtitle:
-    "The server seeds a real example Git repository on demand and exposes the current repository listing over HTTP, plus direct repository pages for the configured owner.",
+    "The server seeds a real example Git repository on demand and exposes the current repository listing over HTTP.",
   title: "Local repositories, served from",
 };
 const HOMEPAGE_MIGRATIONS: readonly StorageMigration[] = [
