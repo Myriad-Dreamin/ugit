@@ -1,0 +1,20 @@
+{
+  "name": "ugit-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Initial Clipanion CLI for ugit.",
+  "bin": {
+    "ugit": "./build/main.js"
+  },
+  "main": "./build/main.js",
+  "types": "./build/main.d.ts",
+  "files": [
+    "build"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "clipanion": "4.0.0-rc.4"
+  }
+}

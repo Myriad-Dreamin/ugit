@@ -8,6 +8,7 @@ const config = [
       ".next/**",
       "out/**",
       "build/**",
+      "**/build/**",
       ".pnpm-store/**",
       ".meow-team-worktrees/**",
       ".codex/**",
