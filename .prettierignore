@@ -6,5 +6,6 @@ node_modules
 openspec
 out
 build
+**/build
 coverage
 .data/repos

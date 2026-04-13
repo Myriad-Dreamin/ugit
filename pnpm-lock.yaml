@@ -49,6 +49,12 @@ importers:
         specifier: 4.1.4
         version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@22.19.13)(vite@8.0.8(@types/node@22.19.13))
 
+  packages/ugit-cli:
+    dependencies:
+      clipanion:
+        specifier: 4.0.0-rc.4
+        version: 4.0.0-rc.4(typanion@3.14.0)
+
 packages:
 
   '@babel/code-frame@7.29.0':
@@ -900,6 +906,11 @@ packages:
 
   client-only@0.0.1:
     resolution: {integrity: sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA==}
+
+  clipanion@4.0.0-rc.4:
+    resolution: {integrity: sha512-CXkMQxU6s9GklO/1f714dkKBMu1lopS1WFF0B8o4AxPykR1hpozxSiUZ5ZUeBjfPgCWqbcNOtZVFhB8Lkfp1+Q==}
+    peerDependencies:
+      typanion: '*'
 
   color-convert@2.0.1:
     resolution: {integrity: sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ==}
@@ -2053,6 +2064,9 @@ packages:
   tunnel-agent@0.6.0:
     resolution: {integrity: sha512-McnNiV1l8RYeY8tBgEpuodCC1mLUdbSN+CYBL7kJsJNInOP8UjDDEwdk6Mw60vdLLrr5NHKZhMAOSrR2NZuQ+w==}
 
+  typanion@3.14.0:
+    resolution: {integrity: sha512-ZW/lVMRabETuYCd9O9ZvMhAh8GslSqaUjxmK/JLPCh6l73CvLBiuXswj/+7LdnWOgYsQ130FqLzFz5aGT4I3Ug==}
+
   type-check@0.4.0:
     resolution: {integrity: sha512-XleUoc9uwGXqjWwXaUTZAmzMcFZ5858QA2vvx1Ur5xIcixXIP+8LnFDgRplU30us6teqdlskFfu+ae4K79Ooew==}
     engines: {node: '>= 0.8.0'}
@@ -3076,6 +3090,10 @@ snapshots:
   chownr@1.1.4: {}
 
   client-only@0.0.1: {}
+
+  clipanion@4.0.0-rc.4(typanion@3.14.0):
+    dependencies:
+      typanion: 3.14.0
 
   color-convert@2.0.1:
     dependencies:
@@ -4440,6 +4458,8 @@ snapshots:
   tunnel-agent@0.6.0:
     dependencies:
       safe-buffer: 5.2.1
+
+  typanion@3.14.0: {}
 
   type-check@0.4.0:
     dependencies:
