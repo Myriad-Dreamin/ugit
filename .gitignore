@@ -7,3 +7,5 @@ coverage
 pnpm-debug.log*
 *.tsbuildinfo
 .DS_Store
+.data/repos/*
+!.data/repos/.gitkeep
