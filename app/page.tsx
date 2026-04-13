@@ -1,24 +1,22 @@
 import Link from "next/link";
-import { getHomepageContent } from "@/lib/storage/homepage";
 import { configuredOwner, getRepositoryHref } from "@/lib/owner";
 import { listRepositories } from "@/lib/repositories";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const homepageContent = await getHomepageContent();
   const repositories = listRepositories();
 
   return (
     <main className="page-shell">
       <section className="hero-card" aria-labelledby="repositories-heading">
-        <p className="hero-eyebrow">{homepageContent.eyebrow}</p>
+        <p className="hero-eyebrow">ugit repositories</p>
         <h1 id="repositories-heading">
-          {homepageContent.title} <code>{homepageContent.repositoriesPath}</code>
+          Local repositories, served from <code>.data/repos</code>
         </h1>
-        <p className="hero-subtitle">{homepageContent.subtitle}</p>
-        <p className="hero-note">
-          {homepageContent.endpointLabel}: <code>{homepageContent.endpointPath}</code>
+        <p className="hero-subtitle">
+          The server seeds a real example Git repository on demand and exposes the current
+          repository listing over HTTP.
         </p>
         <p className="hero-note">
           Owner route prefix: <code>/{configuredOwner.username}</code>

@@ -1,4 +1,4 @@
-import "@/lib/storage/server-only";
+import "server-only";
 
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
