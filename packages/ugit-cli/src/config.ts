@@ -6,6 +6,7 @@ const LOCAL_MACHINE_NAMES = new Set(["local", "localhost"]);
 const CONFIG_RELATIVE_PATH = path.join(".local", "share", "ugit", "config.json");
 
 type ConfigRecord = Record<string, unknown>;
+type ReadConfigFile = (path: string, encoding: BufferEncoding) => string;
 
 export type UgitMachineConfig = Readonly<{
   sshMachine: string;
@@ -29,7 +30,7 @@ export type ResolvedMachine = Readonly<{
 type LoadConfigOptions = Readonly<{
   configPath?: string;
   homeDirectory?: string;
-  readFile?: typeof readFileSync;
+  readFile?: ReadConfigFile;
 }>;
 
 export function getDefaultConfigPath(homeDirectory: string = os.homedir()): string {

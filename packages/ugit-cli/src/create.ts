@@ -1,4 +1,3 @@
-import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import {
@@ -9,20 +8,22 @@ import {
   type ResolvedMachine,
   type UgitConfig,
 } from "./config";
+import {
+  buildShellCommand,
+  getProcessStatus,
+  readOptionalRemoteUrl,
+  resolveRepositoryRoot,
+  runGit,
+  runLocalCommand,
+  runRemoteShellCommand,
+  type CommandRunner,
+} from "./git";
+import { MACHINE_CONFIG_KEY } from "./machine";
+
+export type { CommandRunner, CommandRunnerOptions } from "./git";
 
 const ORIGIN_REMOTE_NAME = "origin";
 const UPSTREAM_REMOTE_NAME = "upstream";
-const MACHINE_CONFIG_KEY = "ugit.machine";
-
-export type CommandRunnerOptions = Readonly<{
-  cwd?: string;
-}>;
-
-export type CommandRunner = (
-  command: string,
-  args: readonly string[],
-  options?: CommandRunnerOptions,
-) => string;
 
 type CreateDirectory = (targetPath: string) => void;
 type PathExists = (targetPath: string) => boolean;
@@ -79,7 +80,13 @@ export function createRepository(options: CreateRepositoryOptions): CreateReposi
     throw new Error(`Unable to derive a repository name from ${repositoryPath}.`);
   }
 
-  const upstreamUrl = readRequiredRemoteUrl(repositoryPath, UPSTREAM_REMOTE_NAME, runCommand);
+  const upstreamUrl = readOptionalRemoteUrl(repositoryPath, UPSTREAM_REMOTE_NAME, runCommand);
+
+  if (!upstreamUrl) {
+    throw new Error(
+      `Repository ${repositoryPath} requires a local "${UPSTREAM_REMOTE_NAME}" remote before ugit create can run.`,
+    );
+  }
   const machine = resolveMachine(config, options.machineName);
   const remoteRepositoryPath = getRemoteRepositoryPath(machine, repositoryName);
   const originUrl = getRemoteRepositoryUrl(machine, repositoryName);
@@ -214,68 +221,6 @@ function createMachineHost(
   };
 }
 
-function resolveRepositoryRoot(targetPath: string, runCommand: CommandRunner): string {
-  let repositoryRoot: string;
-
-  try {
-    repositoryRoot = runGit(targetPath, ["rev-parse", "--show-toplevel"], runCommand);
-  } catch (error) {
-    throw new Error(`Directory ${targetPath} is not an existing Git repository root.`, {
-      cause: error,
-    });
-  }
-
-  const normalizedRepositoryRoot = path.resolve(repositoryRoot);
-  const normalizedTargetPath = path.resolve(targetPath);
-
-  if (normalizedRepositoryRoot !== normalizedTargetPath) {
-    throw new Error(
-      `Directory ${targetPath} is inside repository ${normalizedRepositoryRoot}. Run ugit create from the repository root or pass the repository root directory explicitly.`,
-    );
-  }
-
-  return normalizedRepositoryRoot;
-}
-
-function readRequiredRemoteUrl(
-  repositoryPath: string,
-  remoteName: string,
-  runCommand: CommandRunner,
-): string {
-  const remoteUrl = readOptionalRemoteUrl(repositoryPath, remoteName, runCommand);
-
-  if (!remoteUrl) {
-    throw new Error(
-      `Repository ${repositoryPath} requires a local "${remoteName}" remote before ugit create can run.`,
-    );
-  }
-
-  return remoteUrl;
-}
-
-function readOptionalRemoteUrl(
-  repositoryPath: string,
-  remoteName: string,
-  runCommand: CommandRunner,
-): string | null {
-  try {
-    return runGit(repositoryPath, ["remote", "get-url", remoteName], runCommand);
-  } catch (error) {
-    const stderr = getProcessStream(error, "stderr");
-
-    if (
-      stderr.includes(`No such remote '${remoteName}'`) ||
-      stderr.includes(`No such remote: '${remoteName}'`)
-    ) {
-      return null;
-    }
-
-    throw new Error(`Failed to read Git remote "${remoteName}" in ${repositoryPath}.`, {
-      cause: error,
-    });
-  }
-}
-
 function remotePathExists(
   sshMachine: string,
   repositoryPath: string,
@@ -298,74 +243,6 @@ function remotePathExists(
   }
 }
 
-function runGit(
-  repositoryPath: string,
-  args: readonly string[],
-  runCommand: CommandRunner,
-): string {
-  return runCommand("git", args, { cwd: repositoryPath });
-}
-
-function runLocalCommand(
-  command: string,
-  args: readonly string[],
-  options: CommandRunnerOptions = {},
-): string {
-  const execOptions: ExecFileSyncOptions = {
-    cwd: options.cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  };
-
-  return execFileSync(command, [...args], execOptions)
-    .toString()
-    .trim();
-}
-
 function createLocalDirectory(targetPath: string): void {
   mkdirSync(targetPath, { recursive: true });
-}
-
-function runRemoteShellCommand(
-  sshMachine: string,
-  command: string,
-  runCommand: CommandRunner,
-): string {
-  return runCommand("ssh", [sshMachine, "sh", "-lc", shellQuote(command)]);
-}
-
-function buildShellCommand(args: readonly string[]): string {
-  return args.map(shellQuote).join(" ");
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
-}
-
-function getProcessStream(error: unknown, streamName: "stderr" | "stdout"): string {
-  if (!error || typeof error !== "object") {
-    return "";
-  }
-
-  const stream = (error as { [key: string]: unknown })[streamName];
-
-  if (typeof stream === "string") {
-    return stream;
-  }
-
-  if (Buffer.isBuffer(stream)) {
-    return stream.toString("utf8");
-  }
-
-  return "";
-}
-
-function getProcessStatus(error: unknown): number | null {
-  if (!error || typeof error !== "object") {
-    return null;
-  }
-
-  const status = (error as { status?: unknown }).status;
-
-  return typeof status === "number" ? status : null;
 }
