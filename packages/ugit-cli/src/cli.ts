@@ -6,6 +6,8 @@ import { PullRequestEditCommand } from "./commands/pr-edit";
 import { PullRequestListCommand } from "./commands/pr-list";
 import { PullRequestSyncCommand } from "./commands/pr-sync";
 import { ServeCommand } from "./commands/serve";
+import { WorkflowLogsCommand } from "./commands/workflow-logs";
+import { WorkflowRunCommand } from "./commands/workflow-run";
 
 export function createCli(): Cli {
   const cli = new Cli({
@@ -20,6 +22,8 @@ export function createCli(): Cli {
   cli.register(PullRequestCreateCommand);
   cli.register(PullRequestEditCommand);
   cli.register(PullRequestSyncCommand);
+  cli.register(WorkflowRunCommand);
+  cli.register(WorkflowLogsCommand);
   cli.register(Builtins.HelpCommand);
   cli.register(Builtins.VersionCommand);
 

@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 export type CommandExecutionOptions = Readonly<{
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
 }>;
 
 export type CommandExecutionResult = Readonly<{
@@ -34,10 +35,16 @@ export async function runAsyncCommand(
     const stderrChunks: Buffer[] = [];
 
     child.stdout?.on("data", (chunk) => {
-      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      const output = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+
+      stdoutChunks.push(output);
+      options.onOutput?.(output.toString("utf8"), "stdout");
     });
     child.stderr?.on("data", (chunk) => {
-      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      const output = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+
+      stderrChunks.push(output);
+      options.onOutput?.(output.toString("utf8"), "stderr");
     });
     child.once("error", (error) => {
       reject(new Error(`Failed to start ${formatCommand(command, args)}.`, { cause: error }));

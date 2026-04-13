@@ -57,17 +57,17 @@ describe("executeWorkflowPackages", () => {
       1,
       "pnpm",
       ["install", "--dir", workflowPath, "--ignore-workspace", "--no-frozen-lockfile"],
-      {
+      expect.objectContaining({
         cwd: repositoryPath,
-      },
+      }),
     );
     expect(runCommand).toHaveBeenNthCalledWith(
       2,
       "pnpm",
       ["--dir", workflowPath, "run", "ugit:ci"],
-      {
+      expect.objectContaining({
         cwd: repositoryPath,
-      },
+      }),
     );
   });
 
@@ -90,6 +90,67 @@ describe("executeWorkflowPackages", () => {
       failureMessage: 'Workflow lint must define a "ugit:ci" script.',
       workflows: [],
     });
+  });
+
+  it("runs only the requested workflow when a workflow name is provided", async () => {
+    const repositoryPath = createWorkspace();
+    const lintWorkflowPath = path.join(repositoryPath, ".ugit", "workflows", "lint");
+    const testWorkflowPath = path.join(repositoryPath, ".ugit", "workflows", "test");
+
+    mkdirSync(lintWorkflowPath, { recursive: true });
+    mkdirSync(testWorkflowPath, { recursive: true });
+    writeFileSync(
+      path.join(lintWorkflowPath, "package.json"),
+      JSON.stringify({
+        name: "lint",
+        scripts: {
+          "ugit:ci": 'node -e "process.exit(0)"',
+        },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      path.join(testWorkflowPath, "package.json"),
+      JSON.stringify({
+        name: "test",
+        scripts: {
+          "ugit:ci": 'node -e "process.exit(0)"',
+        },
+      }),
+      "utf8",
+    );
+
+    const runCommand: AsyncCommandRunner = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: "ok",
+      stderr: "",
+    }));
+
+    await expect(
+      executeWorkflowPackages(repositoryPath, runCommand, {
+        workflowName: "test",
+      }),
+    ).resolves.toEqual({
+      success: true,
+      workflows: [
+        {
+          name: "test",
+          status: "passed",
+          installCommand: `pnpm install --dir ${testWorkflowPath} --ignore-workspace --no-frozen-lockfile`,
+          runCommand: `pnpm --dir ${testWorkflowPath} run ugit:ci`,
+          output: "ok\nok",
+        },
+      ],
+    });
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand).toHaveBeenNthCalledWith(
+      1,
+      "pnpm",
+      ["install", "--dir", testWorkflowPath, "--ignore-workspace", "--no-frozen-lockfile"],
+      expect.objectContaining({
+        cwd: repositoryPath,
+      }),
+    );
   });
 });
 

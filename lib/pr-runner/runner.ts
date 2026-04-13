@@ -4,16 +4,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { StorageOptions } from "@/lib/storage/sqlite";
+import { appendWorkflowRunLog } from "@/lib/workflow-runs/log-storage";
 import { attemptFastForwardMerge } from "./merge";
 import { runAsyncCommand, type AsyncCommandRunner } from "./process";
 import { writeCiResultArtifact, type CiResultArtifact } from "./results";
 import {
   SUPERSEDED_CI_JOB_MESSAGE,
-  claimRunnableJobs,
+  claimRunnableExecutions,
   completeCiJob,
+  completeWorkflowRun,
   isLatestCiJob,
   requeueRunningJobs,
+  type ClaimedExecution,
   type ClaimedCiJob,
+  type ClaimedWorkflowRun,
 } from "./storage";
 import { executeWorkflowPackages } from "./workflows";
 
@@ -183,6 +187,63 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
   }
 }
 
+export async function executeWorkflowRunJob(
+  workflowRun: ClaimedWorkflowRun,
+  options: RunnerOptions = {},
+): Promise<void> {
+  const now = options.now ?? (() => new Date());
+  const runCommand = options.runCommand ?? runAsyncCommand;
+  let worktreePath: string | null = null;
+
+  try {
+    appendWorkflowRunLog(
+      workflowRun.logPath,
+      `Starting workflow ${workflowRun.workflowName} on ${workflowRun.branchName}@${workflowRun.commitHash}.\n`,
+    );
+
+    worktreePath = await createDetachedWorktree(workflowRun, runCommand);
+
+    const workflowSummary = await executeWorkflowPackages(worktreePath, runCommand, {
+      workflowName: workflowRun.workflowName,
+      onOutput: (chunk) => appendWorkflowRunLog(workflowRun.logPath, chunk),
+    });
+    const status = workflowSummary.success ? "succeeded" : "failed";
+    const errorMessage = workflowSummary.failureMessage ?? null;
+
+    appendWorkflowRunLog(
+      workflowRun.logPath,
+      `Workflow run ${workflowRun.id} completed with status ${status}.\n`,
+    );
+
+    completeWorkflowRun({
+      workflowId: workflowRun.id,
+      status,
+      errorMessage,
+      now,
+      storage: options.storage,
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    appendWorkflowRunLog(
+      workflowRun.logPath,
+      `${errorMessage}\nWorkflow run ${workflowRun.id} completed with status failed.\n`,
+    );
+
+    completeWorkflowRun({
+      workflowId: workflowRun.id,
+      status: "failed",
+      errorMessage,
+      now,
+      storage: options.storage,
+    });
+  } finally {
+    if (worktreePath) {
+      await cleanupDetachedWorktree(workflowRun.repositoryPath, worktreePath, runCommand);
+    }
+  }
+}
+
 function markJobSupersededIfStale(
   job: Pick<ClaimedCiJob, "id">,
   options: Pick<RunnerOptions, "now" | "storage">,
@@ -214,22 +275,22 @@ async function drainRunner(options: RunnerOptions): Promise<void> {
   }
 
   while (true) {
-    const claimedJobs = claimRunnableJobs({
+    const claimedExecutions = claimRunnableExecutions({
       now: options.now,
       storage: options.storage,
     });
 
-    if (claimedJobs.length === 0) {
+    if (claimedExecutions.length === 0) {
       return;
     }
 
-    for (const job of claimedJobs) {
-      const executionPromise = executeCiJob(job, options).finally(() => {
-        globals.activeJobs.delete(job.id);
+    for (const execution of claimedExecutions) {
+      const executionPromise = executeClaimedJob(execution, options).finally(() => {
+        globals.activeJobs.delete(execution.id);
         void nudgePullRequestRunner(options);
       });
 
-      globals.activeJobs.set(job.id, executionPromise);
+      globals.activeJobs.set(execution.id, executionPromise);
     }
 
     if (globals.activeJobs.size === 0) {
@@ -241,7 +302,7 @@ async function drainRunner(options: RunnerOptions): Promise<void> {
 }
 
 async function createDetachedWorktree(
-  job: ClaimedCiJob,
+  job: Pick<ClaimedCiJob, "commitHash" | "repositoryName" | "repositoryPath">,
   runCommand: AsyncCommandRunner,
 ): Promise<string> {
   const worktreePath = await mkdtemp(path.join(os.tmpdir(), `ugit-ci-${job.repositoryName}-`));
@@ -280,6 +341,17 @@ async function cleanupDetachedWorktree(
     force: true,
     recursive: true,
   });
+}
+
+async function executeClaimedJob(
+  execution: ClaimedExecution,
+  options: RunnerOptions,
+): Promise<void> {
+  if (execution.kind === "workflow_run") {
+    return await executeWorkflowRunJob(execution, options);
+  }
+
+  return await executeCiJob(execution, options);
 }
 
 function getRunnerGlobals(): RunnerGlobals {
