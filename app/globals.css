@@ -85,7 +85,9 @@ body {
 .hero-card h1 code,
 .repository-path,
 .repository-relative-path,
-.repository-route {
+.repository-route,
+.workflow-commit code,
+.workflow-metadata-list time {
   font-family: "SFMono-Regular", "SF Mono", "Cascadia Code", monospace;
 }
 
@@ -112,6 +114,16 @@ body {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.56);
   border: 1px solid rgba(117, 79, 36, 0.12);
+}
+
+.repository-panels {
+  margin-top: 28px;
+  display: grid;
+  gap: 20px;
+}
+
+.repository-panels .repositories-panel {
+  margin-top: 0;
 }
 
 .repositories-header {
@@ -212,6 +224,177 @@ body {
   gap: 14px;
 }
 
+.workflow-panel-status {
+  margin: 18px 0 0;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.status-empty {
+  color: var(--text-muted);
+  background: rgba(104, 77, 49, 0.1);
+  border-color: rgba(104, 77, 49, 0.14);
+}
+
+.status-queued {
+  color: #7b5200;
+  background: rgba(236, 189, 73, 0.2);
+  border-color: rgba(189, 142, 24, 0.22);
+}
+
+.status-running {
+  color: #0f5963;
+  background: rgba(87, 179, 192, 0.18);
+  border-color: rgba(39, 128, 140, 0.22);
+}
+
+.status-succeeded {
+  color: #245d37;
+  background: rgba(95, 177, 116, 0.18);
+  border-color: rgba(53, 132, 73, 0.22);
+}
+
+.status-failed {
+  color: #8a2323;
+  background: rgba(197, 92, 92, 0.14);
+  border-color: rgba(154, 52, 52, 0.22);
+}
+
+.status-mixed {
+  color: #72480d;
+  background: rgba(196, 144, 58, 0.17);
+  border-color: rgba(150, 107, 37, 0.22);
+}
+
+.workflow-summary-list {
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 14px;
+}
+
+.workflow-summary-item {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 16px;
+  background: rgba(255, 252, 247, 0.86);
+  border: 1px solid rgba(117, 79, 36, 0.14);
+}
+
+.workflow-summary-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workflow-branch-name,
+.workflow-commit,
+.workflow-results-label,
+.workflow-note,
+.workflow-result-name {
+  margin: 0;
+}
+
+.workflow-branch-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.workflow-commit {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.workflow-metadata-list {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.workflow-metadata-list div {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(117, 79, 36, 0.1);
+}
+
+.workflow-metadata-list dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workflow-metadata-list dd {
+  margin: 8px 0 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.workflow-results {
+  display: grid;
+  gap: 12px;
+}
+
+.workflow-results-label {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.workflow-results-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-result-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(117, 79, 36, 0.1);
+}
+
+.workflow-result-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.workflow-note {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
 .entry-item {
   display: grid;
   grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
@@ -254,6 +437,12 @@ body {
   }
 
   .repositories-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .workflow-summary-header,
+  .workflow-result-item {
     flex-direction: column;
     align-items: flex-start;
   }
