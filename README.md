@@ -35,8 +35,8 @@ ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--d
 
 ## Codex skills
 
-This checkout includes a repo-local `ugit-ci-setup` skill in
-`skills/ugit-ci-setup`.
+This branch includes the authored payload for the repo-local `ugit-ci-setup`
+skill in `skills/ugit-ci-setup`.
 
 Use it when you want Codex to inspect a repository, scaffold
 `.ugit/workflows/<workflow>/`, verify local ugit prerequisites, and optionally
@@ -44,9 +44,12 @@ trigger `ugit workflow run` plus `ugit workflow logs`. The skill builds on the
 existing ugit CLI instead of replacing `ugit create`, `ugit serve`,
 `ugit pr create`, or the workflow commands.
 
-Lane note: the harness mounts `.codex` read-only in dedicated worktrees, so the
-skill ships from the writable `skills/` fallback instead of
-`.codex/skills/ugit-ci-setup` in this lane checkout.
+The approved discovery path is still `.codex/skills/ugit-ci-setup`. Dedicated
+harness worktrees mount `.codex` read-only in this lane, so the branch cannot
+materialize that path directly from here. When you have a writable checkout,
+mirror `skills/ugit-ci-setup` into `.codex/skills/ugit-ci-setup` and re-run
+the proof at `lib/codex-skills.test.ts`. The exact copy-and-verify steps live
+in `skills/ugit-ci-setup/MATERIALIZE.md`.
 
 ## Prerequisites for `ugit create`
 

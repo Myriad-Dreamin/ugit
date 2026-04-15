@@ -23,8 +23,13 @@
 
 - The lane worktree mounts `.codex` as a separate read-only filesystem, so the
   required `.codex/skills/ugit-ci-setup` path still cannot be materialized from
-  this checkout. Git metadata for this worktree is also read-only, so the lane
-  cannot stage or commit a workaround into `.git/worktrees/meow-1` either.
+  this checkout. Direct writes fail with `Read-only file system`, for example
+  `mkdir -p .codex/skills/ugit-ci-setup`. Git metadata for this worktree is
+  also read-only, so the lane cannot stage or commit a workaround into
+  `.git/worktrees/meow-1` either.
+- The authored skill payload remains ready under `skills/ugit-ci-setup/`. Copy
+  steps for a writable checkout now live in
+  `skills/ugit-ci-setup/MATERIALIZE.md`.
 - Remote workflow-run smoke validation also depends on a safe ugit machine
   config; this lane currently has no `~/.local/share/ugit/config.json`, so the
   smoke exercise can only verify local scaffolding plus the prerequisite gate.
