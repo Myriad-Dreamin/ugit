@@ -33,6 +33,51 @@ ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--d
 
 `ugit workflow logs` streams a manual workflow run's append-only server logs over HTTP-over-SSH until the run finishes.
 
+## Codex skills
+
+The authored `ugit-ci-setup` skill payload lives in `skills/ugit-ci-setup`.
+Its repo-local discovery path is `.codex/skills/ugit-ci-setup`.
+
+Use it when you want Codex to inspect a repository, scaffold
+`.ugit/workflows/<workflow>/`, verify local ugit prerequisites, and optionally
+trigger `ugit workflow run` plus `ugit workflow logs`. The skill builds on the
+existing ugit CLI instead of replacing `ugit create`, `ugit serve`,
+`ugit pr create`, or the workflow commands.
+
+Run `./scripts/materialize-ugit-ci-skill.sh <destination>` when you need to
+copy the authored payload into a writable Codex discovery root such as another
+checkout or a temporary smoke directory.
+
+Run `./scripts/track-ugit-ci-skill.sh` when the current checkout mounts
+`.codex` and `.git` read-only. That helper writes a lane-local discovery mirror
+tree at `.data/codex-skills/ugit-ci-setup/`. Use the printed
+`CODEX_SKILLS_DISCOVERY_PREFIX=... pnpm exec vitest run lib/codex-skills.test.ts`
+command only for an explicit mirror parity check. It does not satisfy the
+repo-local `.codex/skills/ugit-ci-setup` requirement.
+
+Run `./scripts/export-ugit-ci-skill-patch.sh --output .data/codex-skills/ugit-ci-setup.patch`
+when this lane cannot write `.codex` or `.git` but you need an exact patch to
+apply from a writable checkout. The patch adds the required
+`.codex/skills/ugit-ci-setup` files and can be applied with `git apply`.
+
+Run `./scripts/sync-ugit-ci-skill.sh` from a writable checkout to refresh
+`.codex/skills/ugit-ci-setup`, stage those repo-local skill files, and then
+rerun `pnpm exec vitest run lib/codex-skills.test.ts`. Pass
+`--repo-root /path/to/writable-checkout` when you need to sync another checkout
+from this lane, or `--skip-git-add` when you only need the in-place `.codex`
+copy refreshed. If that writable materialization fails because the destination
+mounts `.codex` read-only, the script now points back to
+`./scripts/track-ugit-ci-skill.sh` for the lane-local proof path and to
+`./scripts/export-ugit-ci-skill-patch.sh` for a writable-checkout handoff,
+while keeping the default repository proof tied to the committed `.codex`
+tree.
+
+Run `./scripts/smoke-ugit-ci-skill.sh` when you need a read-only-lane smoke
+exercise. It materializes the skill into a temporary writable `.codex` path,
+reuses `lib/codex-skills.test.ts` against that temp discovery tree, scaffolds a
+temporary `.ugit/workflows/ci` package from the committed templates, and runs
+`pnpm --dir <temp>/.ugit/workflows/ci run ugit:ci`.
+
 ## Prerequisites for `ugit create`
 
 - Git must be installed and available on `PATH`.
