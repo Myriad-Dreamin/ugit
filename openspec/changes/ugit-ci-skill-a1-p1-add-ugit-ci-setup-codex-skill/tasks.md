@@ -21,9 +21,10 @@
 
 ## Blockers
 
-- The lane worktree mounts `.codex` read-only, so the materialized skill source
-  is staged under `.codex-staging/skills/ugit-ci-setup` for review instead of
-  the intended `.codex/skills/ugit-ci-setup` path. Remote workflow-run smoke
-  validation also depends on a safe ugit machine config; this lane currently
-  has no `~/.local/share/ugit/config.json`, so the smoke exercise can only
-  verify local scaffolding plus the prerequisite gate.
+- The lane worktree mounts `.codex` read-only, so the materialized repo-local
+  skill ships from `skills/ugit-ci-setup`, the writable repository skill root
+  that the harness links into `CODEX_HOME`, instead of the intended
+  `.codex/skills/ugit-ci-setup` path. Remote workflow-run smoke validation also
+  depends on a safe ugit machine config; this lane currently has no
+  `~/.local/share/ugit/config.json`, so the smoke exercise can only verify
+  local scaffolding plus the prerequisite gate.

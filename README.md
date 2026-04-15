@@ -35,14 +35,18 @@ ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--d
 
 ## Codex skills
 
-This checkout includes staged source for a repo-local `ugit-ci-setup` skill in
-`.codex-staging/skills/ugit-ci-setup`.
+This checkout includes a repo-local `ugit-ci-setup` skill in
+`skills/ugit-ci-setup`.
 
 Use it when you want Codex to inspect a repository, scaffold
 `.ugit/workflows/<workflow>/`, verify local ugit prerequisites, and optionally
 trigger `ugit workflow run` plus `ugit workflow logs`. The skill builds on the
 existing ugit CLI instead of replacing `ugit create`, `ugit serve`,
 `ugit pr create`, or the workflow commands.
+
+Lane note: the harness mounts `.codex` read-only in dedicated worktrees, so the
+skill ships from the writable `skills/` fallback instead of
+`.codex/skills/ugit-ci-setup` in this lane checkout.
 
 ## Prerequisites for `ugit create`
 
