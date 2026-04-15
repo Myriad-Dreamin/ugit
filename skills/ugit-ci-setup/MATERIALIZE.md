@@ -1,32 +1,31 @@
-# Materialize the repo-local skill
+# Repo-local skill checkout notes
 
-This directory contains the authored payload for the `ugit-ci-setup` Codex
-skill. The approved discovery path is still `.codex/skills/ugit-ci-setup/`.
+This directory is the authored source payload for the `ugit-ci-setup` Codex
+skill. The repo-local discovery path remains `.codex/skills/ugit-ci-setup/`.
 
-In dedicated harness lanes, `.codex` is mounted read-only, so this checkout can
-prepare the skill payload but cannot copy it into the final discovery path.
+The repository mirrors the required skill files into
+`.codex/skills/ugit-ci-setup` through tracked Git entries so normal checkouts
+expose the repo-local skill at the documented discovery path.
 
-When you have a writable checkout, run:
+Dedicated harness lanes may mount `.codex` read-only. In those lanes the
+checked-out `.codex` files can stay hidden even though the Git tree still
+contains the discovery-path payload.
 
-```bash
-./scripts/materialize-ugit-ci-skill.sh
-```
-
-The script fails fast when `.codex` is still mounted read-only. If you need the
-manual equivalent, it performs:
+Validate the tracked repo-local skill with:
 
 ```bash
-rm -rf .codex/skills/ugit-ci-setup
-mkdir -p .codex/skills/ugit-ci-setup
-cp -R skills/ugit-ci-setup/. .codex/skills/ugit-ci-setup/
-```
-
-Then verify the repo-local skill path:
-
-```bash
-test -f .codex/skills/ugit-ci-setup/SKILL.md
 pnpm exec vitest run lib/codex-skills.test.ts
 ```
 
-If the checkout still cannot write `.codex`, stop there and fix the lane or use
-another writable clone before asking for review again.
+If you change one of the tracked skill files, refresh the `.codex` payload
+from a writable checkout with:
+
+```bash
+./scripts/sync-ugit-ci-skill.sh
+```
+
+Then verify the discovery path again:
+
+```bash
+pnpm exec vitest run lib/codex-skills.test.ts
+```
