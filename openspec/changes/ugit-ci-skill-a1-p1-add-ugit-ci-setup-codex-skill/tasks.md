@@ -30,8 +30,10 @@
   any writable destination, so other checkouts can refresh
   `.codex/skills/ugit-ci-setup` without reimplementing the file list.
 - `./scripts/sync-ugit-ci-skill.sh` now reuses that materialization helper,
-  refreshes `.codex/skills/ugit-ci-setup` before staging, and supports
-  `--skip-git-add` when only the in-place discovery copy needs to be updated.
+  refreshes `.codex/skills/ugit-ci-setup` before staging, supports
+  `--repo-root /path/to/writable-checkout` when this lane needs to stage the
+  discovery payload in another checkout, and supports `--skip-git-add` when
+  only the in-place discovery copy needs to be updated.
 - `./scripts/smoke-ugit-ci-skill.sh` now provides a committed read-only-lane
   smoke path by materializing the skill into a temporary writable `.codex`
   tree, reusing `lib/codex-skills.test.ts`, and scaffolding a temporary
