@@ -6,7 +6,14 @@ skill. The approved discovery path is still `.codex/skills/ugit-ci-setup/`.
 In dedicated harness lanes, `.codex` is mounted read-only, so this checkout can
 prepare the skill payload but cannot copy it into the final discovery path.
 
-When you have a writable checkout, mirror the payload into `.codex`:
+When you have a writable checkout, run:
+
+```bash
+./scripts/materialize-ugit-ci-skill.sh
+```
+
+The script fails fast when `.codex` is still mounted read-only. If you need the
+manual equivalent, it performs:
 
 ```bash
 rm -rf .codex/skills/ugit-ci-setup

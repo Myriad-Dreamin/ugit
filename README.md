@@ -47,9 +47,10 @@ existing ugit CLI instead of replacing `ugit create`, `ugit serve`,
 The approved discovery path is still `.codex/skills/ugit-ci-setup`. Dedicated
 harness worktrees mount `.codex` read-only in this lane, so the branch cannot
 materialize that path directly from here. When you have a writable checkout,
-mirror `skills/ugit-ci-setup` into `.codex/skills/ugit-ci-setup` and re-run
-the proof at `lib/codex-skills.test.ts`. The exact copy-and-verify steps live
-in `skills/ugit-ci-setup/MATERIALIZE.md`.
+run `./scripts/materialize-ugit-ci-skill.sh` to mirror
+`skills/ugit-ci-setup` into `.codex/skills/ugit-ci-setup`, then re-run the
+proof at `lib/codex-skills.test.ts`. The exact copy-and-verify steps live in
+`skills/ugit-ci-setup/MATERIALIZE.md`.
 
 ## Prerequisites for `ugit create`
 
