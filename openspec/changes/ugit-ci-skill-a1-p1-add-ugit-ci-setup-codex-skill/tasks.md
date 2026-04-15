@@ -26,8 +26,13 @@
   tree at `.data/codex-skills/ugit-ci-setup/` without touching the
   mounted worktree or Git metadata paths.
 - `lib/codex-skills.test.ts` now verifies the discovery payload from the
-  worktree when present and otherwise falls back to that mirror, so the
-  default proof stays meaningful in both writable and read-only lanes.
+  worktree when present and otherwise falls back to the committed `HEAD`
+  tree, so the default proof still requires the real repo-local
+  `.codex/skills/ugit-ci-setup` payload even when a read-only mount hides it.
+- Use the `CODEX_SKILLS_DISCOVERY_PREFIX=<absolute-mirror-root>` command that
+  `./scripts/track-ugit-ci-skill.sh` prints only for explicit mirror parity
+  checks; the lane-local `.data/codex-skills/ugit-ci-setup/` mirror is not a
+  substitute for the committed `.codex` discovery tree.
 - `./scripts/materialize-ugit-ci-skill.sh` still copies the authored payload
   into any writable destination, so other checkouts can refresh
   `.codex/skills/ugit-ci-setup` without reimplementing the file list.

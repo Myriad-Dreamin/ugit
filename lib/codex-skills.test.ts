@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const REQUIRED_SKILL_FILES = [
@@ -12,8 +13,6 @@ const REQUIRED_SKILL_FILES = [
 
 const AUTHORED_PREFIX = "skills/ugit-ci-setup";
 const DISCOVERY_PREFIX = process.env.CODEX_SKILLS_DISCOVERY_PREFIX ?? ".codex/skills/ugit-ci-setup";
-const DISCOVERY_MIRROR_PREFIX =
-  process.env.CODEX_SKILLS_DISCOVERY_MIRROR_PREFIX ?? ".data/codex-skills/ugit-ci-setup";
 
 function toAuthoredPath(relativePath: (typeof REQUIRED_SKILL_FILES)[number]) {
   return join(AUTHORED_PREFIX, relativePath);
@@ -23,14 +22,18 @@ function toDiscoveryPath(relativePath: (typeof REQUIRED_SKILL_FILES)[number]) {
   return join(DISCOVERY_PREFIX, relativePath);
 }
 
-function readMirrorFile(relativePath: (typeof REQUIRED_SKILL_FILES)[number]) {
-  const mirrorPath = join(DISCOVERY_MIRROR_PREFIX, relativePath);
-
-  if (!existsSync(mirrorPath)) {
+function readCommittedDiscoveryFile(relativePath: (typeof REQUIRED_SKILL_FILES)[number]) {
+  if (DISCOVERY_PREFIX.startsWith("/")) {
     return null;
   }
 
-  return readFileSync(mirrorPath, "utf8");
+  try {
+    return execFileSync("git", ["show", `HEAD:${toDiscoveryPath(relativePath)}`], {
+      encoding: "utf8",
+    });
+  } catch {
+    return null;
+  }
 }
 
 function readTrackedDiscoveryFile(relativePath: (typeof REQUIRED_SKILL_FILES)[number]) {
@@ -40,11 +43,7 @@ function readTrackedDiscoveryFile(relativePath: (typeof REQUIRED_SKILL_FILES)[nu
     return readFileSync(discoveryPath, "utf8");
   }
 
-  if (DISCOVERY_PREFIX.startsWith("/")) {
-    return null;
-  }
-
-  return readMirrorFile(relativePath);
+  return readCommittedDiscoveryFile(relativePath);
 }
 
 describe("repo-local Codex skills", () => {
@@ -66,7 +65,7 @@ describe("repo-local Codex skills", () => {
 
       expect(
         trackedContents,
-        `${discoveryPath} is missing from both the worktree and the lane-local discovery mirror; run ./scripts/track-ugit-ci-skill.sh in this lane or ./scripts/sync-ugit-ci-skill.sh --repo-root /path/to/writable-checkout before rerunning this proof`,
+        `${discoveryPath} is missing from both the worktree and the committed Git tree; sync and commit the repo-local discovery payload from a writable checkout with ./scripts/sync-ugit-ci-skill.sh --repo-root /path/to/writable-checkout before rerunning this proof`,
       ).not.toBeNull();
       expect(trackedContents).toBe(readFileSync(authoredPath, "utf8"));
     }

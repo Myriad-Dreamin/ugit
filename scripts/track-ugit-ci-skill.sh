@@ -62,4 +62,4 @@ if ! "$SCRIPT_DIR/materialize-ugit-ci-skill.sh" "$MIRROR_ROOT"; then
 fi
 
 echo "Wrote a lane-local ugit-ci-setup discovery mirror to $MIRROR_ROOT"
-echo "Next: pnpm exec vitest run lib/codex-skills.test.ts"
+echo "Next: CODEX_SKILLS_DISCOVERY_PREFIX=$MIRROR_ROOT pnpm exec vitest run lib/codex-skills.test.ts"

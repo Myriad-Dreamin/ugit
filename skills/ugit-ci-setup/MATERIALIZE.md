@@ -40,8 +40,10 @@ refreshed.
 
 `./scripts/track-ugit-ci-skill.sh` writes a lane-local discovery mirror tree
 at `.data/codex-skills/ugit-ci-setup/` without touching the mounted
-`.codex` or `.git` paths. `lib/codex-skills.test.ts` falls back to that mirror
-when the read-only lane hides `.codex`.
+`.codex` or `.git` paths. It prints a
+`CODEX_SKILLS_DISCOVERY_PREFIX=<mirror> pnpm exec vitest run lib/codex-skills.test.ts`
+command for an explicit mirror parity check, but that mirror does not replace
+the required committed `.codex/skills/ugit-ci-setup` payload.
 
 Then validate the repo-local skill with:
 
