@@ -25,6 +25,13 @@ Or target another writable checkout directly from this lane with:
 ./scripts/sync-ugit-ci-skill.sh --repo-root /path/to/checkout
 ```
 
+If this lane cannot write `.codex` or `.git` but you need a patch that another
+writable checkout can apply directly, run:
+
+```bash
+./scripts/export-ugit-ci-skill-patch.sh --output .data/codex-skills/ugit-ci-setup.patch
+```
+
 To materialize the skill into another writable checkout or an arbitrary
 temporary discovery root without staging, run:
 
@@ -44,6 +51,11 @@ at `.data/codex-skills/ugit-ci-setup/` without touching the mounted
 `CODEX_SKILLS_DISCOVERY_PREFIX=<mirror> pnpm exec vitest run lib/codex-skills.test.ts`
 command for an explicit mirror parity check, but that mirror does not replace
 the required committed `.codex/skills/ugit-ci-setup` payload.
+
+`./scripts/export-ugit-ci-skill-patch.sh` materializes the same required files
+into a temporary writable tree and emits a `git apply` patch that adds
+`.codex/skills/ugit-ci-setup` from a writable checkout without retyping the
+file list.
 
 Then validate the repo-local skill with:
 

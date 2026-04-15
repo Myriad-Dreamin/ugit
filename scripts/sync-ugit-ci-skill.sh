@@ -45,6 +45,8 @@ DISCOVERY_DESTINATION="$TARGET_REPO_ROOT/$DISCOVERY_PREFIX"
 if ! "$SCRIPT_DIR/materialize-ugit-ci-skill.sh" "$DISCOVERY_DESTINATION"; then
   echo "If the destination checkout mounts .codex or .git read-only, write the lane-local discovery mirror instead:" >&2
   echo "  ./scripts/track-ugit-ci-skill.sh --repo-root $TARGET_REPO_ROOT" >&2
+  echo "Or export an applicable .codex patch for a writable checkout with:" >&2
+  echo "  ./scripts/export-ugit-ci-skill-patch.sh --repo-root $TARGET_REPO_ROOT --output .data/codex-skills/ugit-ci-setup.patch" >&2
   exit 1
 fi
 

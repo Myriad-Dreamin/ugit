@@ -55,6 +55,11 @@ tree at `.data/codex-skills/ugit-ci-setup/`. Use the printed
 command only for an explicit mirror parity check. It does not satisfy the
 repo-local `.codex/skills/ugit-ci-setup` requirement.
 
+Run `./scripts/export-ugit-ci-skill-patch.sh --output .data/codex-skills/ugit-ci-setup.patch`
+when this lane cannot write `.codex` or `.git` but you need an exact patch to
+apply from a writable checkout. The patch adds the required
+`.codex/skills/ugit-ci-setup` files and can be applied with `git apply`.
+
 Run `./scripts/sync-ugit-ci-skill.sh` from a writable checkout to refresh
 `.codex/skills/ugit-ci-setup`, stage those repo-local skill files, and then
 rerun `pnpm exec vitest run lib/codex-skills.test.ts`. Pass
@@ -62,8 +67,10 @@ rerun `pnpm exec vitest run lib/codex-skills.test.ts`. Pass
 from this lane, or `--skip-git-add` when you only need the in-place `.codex`
 copy refreshed. If that writable materialization fails because the destination
 mounts `.codex` read-only, the script now points back to
-`./scripts/track-ugit-ci-skill.sh` for the lane-local proof path while keeping
-the default repository proof tied to the committed `.codex` tree.
+`./scripts/track-ugit-ci-skill.sh` for the lane-local proof path and to
+`./scripts/export-ugit-ci-skill-patch.sh` for a writable-checkout handoff,
+while keeping the default repository proof tied to the committed `.codex`
+tree.
 
 Run `./scripts/smoke-ugit-ci-skill.sh` when you need a read-only-lane smoke
 exercise. It materializes the skill into a temporary writable `.codex` path,

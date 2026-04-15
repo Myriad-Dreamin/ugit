@@ -65,7 +65,7 @@ describe("repo-local Codex skills", () => {
 
       expect(
         trackedContents,
-        `${discoveryPath} is missing from both the worktree and the committed Git tree; sync and commit the repo-local discovery payload from a writable checkout with ./scripts/sync-ugit-ci-skill.sh --repo-root /path/to/writable-checkout before rerunning this proof`,
+        `${discoveryPath} is missing from both the worktree and the committed Git tree; sync and commit the repo-local discovery payload from a writable checkout with ./scripts/sync-ugit-ci-skill.sh --repo-root /path/to/writable-checkout, or export and apply the patch from ./scripts/export-ugit-ci-skill-patch.sh before rerunning this proof`,
       ).not.toBeNull();
       expect(trackedContents).toBe(readFileSync(authoredPath, "utf8"));
     }

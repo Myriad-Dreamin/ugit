@@ -41,6 +41,10 @@
   `--repo-root /path/to/writable-checkout`, and now points back to
   `./scripts/track-ugit-ci-skill.sh` when the destination checkout mounts
   `.codex` read-only and needs the lane-local proof path instead.
+- `./scripts/export-ugit-ci-skill-patch.sh` now emits an applicable
+  `.codex/skills/ugit-ci-setup` patch from the authored payload so a writable
+  checkout can land the required discovery tree even when this lane can only
+  produce proof artifacts.
 - `./scripts/smoke-ugit-ci-skill.sh` still provides the concrete smoke path by
   materializing the skill into a temporary writable `.codex` tree, reusing
   `lib/codex-skills.test.ts`, scaffolding a temporary
