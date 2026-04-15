@@ -22,11 +22,13 @@
 ## Validation notes
 
 - Dedicated harness lanes can mount `.codex` read-only, so this implementation
-  verifies the tracked `.codex/skills/ugit-ci-setup` payload from Git when the
-  discovery path is masked in the local working tree.
+  cannot materialize `.codex/skills/ugit-ci-setup` directly in this checkout.
 - This lane also cannot create `.git/worktrees/meow-1/index.lock`, so the
-  staged `.codex` discovery payload still needs to be synced from a writable
-  checkout before task 2.1 can be marked complete.
+  repo-local `.codex` discovery payload still needs to be synced from a
+  writable checkout before task 2.1 can be marked complete.
+- `./scripts/sync-ugit-ci-skill.sh` now copies the authored payload into
+  `.codex/skills/ugit-ci-setup` and stages those files when the checkout is
+  writable.
 - Remote workflow-run smoke validation still depends on a safe ugit machine
   config; this lane currently has no `~/.local/share/ugit/config.json`, so the
   smoke exercise verifies local scaffolding plus the prerequisite gate.

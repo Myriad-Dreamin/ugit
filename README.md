@@ -35,9 +35,8 @@ ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--d
 
 ## Codex skills
 
-This repository ships the repo-local `ugit-ci-setup` skill at
-`.codex/skills/ugit-ci-setup` and keeps the authored source payload in
-`skills/ugit-ci-setup`.
+The authored `ugit-ci-setup` skill payload lives in `skills/ugit-ci-setup`.
+Its repo-local discovery path is `.codex/skills/ugit-ci-setup`.
 
 Use it when you want Codex to inspect a repository, scaffold
 `.ugit/workflows/<workflow>/`, verify local ugit prerequisites, and optionally
@@ -45,12 +44,11 @@ trigger `ugit workflow run` plus `ugit workflow logs`. The skill builds on the
 existing ugit CLI instead of replacing `ugit create`, `ugit serve`,
 `ugit pr create`, or the workflow commands.
 
-Dedicated harness lanes may mount `.codex` read-only, which can mask the
-checked-out discovery path on disk even though the Git tree carries it. Use
-`pnpm exec vitest run lib/codex-skills.test.ts` to verify the tracked payload,
-and run `./scripts/sync-ugit-ci-skill.sh` from a writable checkout if you
-change the tracked skill files under
-`skills/ugit-ci-setup`.
+Run `./scripts/sync-ugit-ci-skill.sh` from a writable checkout to copy the
+authored payload into `.codex/skills/ugit-ci-setup`, stage those repo-local
+skill files, and then rerun `pnpm exec vitest run lib/codex-skills.test.ts`.
+If your checkout mounts `.codex` or `.git` read-only, the helper stops with
+mount diagnostics so you can retry from a writable checkout before review.
 
 ## Prerequisites for `ugit create`
 
