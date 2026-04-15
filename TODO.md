@@ -8,6 +8,6 @@ license: Apache-2.0
 
 - Materialize the repo-local `ugit-ci-setup` Codex skill discovery path for
   CI scaffolding by running `./scripts/sync-ugit-ci-skill.sh` from a writable
-  checkout so `.codex/skills/ugit-ci-setup` is committed and
-  `lib/codex-skills.test.ts` can pass.
+  checkout so `.codex/skills/ugit-ci-setup` is committed and the default
+  `lib/codex-skills.test.ts` path can pass without the temporary smoke helper.
 - Expand the landing page starter experience so the home screen explains the default app structure and validation commands for new contributors.

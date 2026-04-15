@@ -50,6 +50,12 @@ skill files, and then rerun `pnpm exec vitest run lib/codex-skills.test.ts`.
 If your checkout mounts `.codex` or `.git` read-only, the helper stops with
 mount diagnostics so you can retry from a writable checkout before review.
 
+Run `./scripts/smoke-ugit-ci-skill.sh` when you need a read-only-lane smoke
+exercise. It materializes the skill into a temporary writable `.codex` path,
+reuses `lib/codex-skills.test.ts` against that temp discovery tree, scaffolds a
+temporary `.ugit/workflows/ci` package from the committed templates, and runs
+`pnpm --dir <temp>/.ugit/workflows/ci run ugit:ci`.
+
 ## Prerequisites for `ugit create`
 
 - Git must be installed and available on `PATH`.

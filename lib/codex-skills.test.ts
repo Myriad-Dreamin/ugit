@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const REQUIRED_SKILL_FILES = [
@@ -10,14 +11,14 @@ const REQUIRED_SKILL_FILES = [
 ] as const;
 
 const AUTHORED_PREFIX = "skills/ugit-ci-setup";
-const DISCOVERY_PREFIX = ".codex/skills/ugit-ci-setup";
+const DISCOVERY_PREFIX = process.env.CODEX_SKILLS_DISCOVERY_PREFIX ?? ".codex/skills/ugit-ci-setup";
 
 function toAuthoredPath(relativePath: (typeof REQUIRED_SKILL_FILES)[number]) {
-  return `${AUTHORED_PREFIX}/${relativePath}`;
+  return join(AUTHORED_PREFIX, relativePath);
 }
 
 function toDiscoveryPath(relativePath: (typeof REQUIRED_SKILL_FILES)[number]) {
-  return `${DISCOVERY_PREFIX}/${relativePath}`;
+  return join(DISCOVERY_PREFIX, relativePath);
 }
 
 describe("repo-local Codex skills", () => {

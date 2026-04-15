@@ -21,3 +21,15 @@ Then validate the repo-local skill with:
 ```bash
 pnpm exec vitest run lib/codex-skills.test.ts
 ```
+
+If you only need to smoke-test the authored payload from a read-only harness
+lane, run:
+
+```bash
+./scripts/smoke-ugit-ci-skill.sh
+```
+
+That helper materializes the same required files into a temporary writable
+`.codex` path, reuses `lib/codex-skills.test.ts` against that temp discovery
+tree, scaffolds a temporary `.ugit/workflows/ci` package from the committed
+templates, and runs `pnpm --dir <temp>/.ugit/workflows/ci run ugit:ci`.

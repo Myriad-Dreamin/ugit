@@ -29,6 +29,10 @@
 - `./scripts/sync-ugit-ci-skill.sh` now copies the authored payload into
   `.codex/skills/ugit-ci-setup` and stages those files when the checkout is
   writable.
+- `./scripts/smoke-ugit-ci-skill.sh` now provides a committed read-only-lane
+  smoke path by materializing the skill into a temporary writable `.codex`
+  tree, reusing `lib/codex-skills.test.ts`, and scaffolding a temporary
+  `.ugit/workflows/ci` package from the committed templates.
 - Remote workflow-run smoke validation still depends on a safe ugit machine
   config; this lane currently has no `~/.local/share/ugit/config.json`, so the
   smoke exercise verifies local scaffolding plus the prerequisite gate.
