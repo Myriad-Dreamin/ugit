@@ -1,0 +1,9 @@
+{
+  "name": "@ugit-workflows/__WORKFLOW_NAME__",
+  "private": true,
+  "version": "0.0.0",
+  "description": "ugit workflow package for __WORKFLOW_NAME__",
+  "scripts": {
+    "ugit:ci": "./run-ugit-ci.sh"
+  }
+}

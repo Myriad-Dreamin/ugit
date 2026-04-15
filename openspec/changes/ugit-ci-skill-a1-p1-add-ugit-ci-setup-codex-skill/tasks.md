@@ -1,7 +1,7 @@
 ## 1. Proposal Alignment
 
-- [ ] 1.1 Review the approved OpenSpec artifacts for "Add ugit CI setup Codex skill" and confirm the canonical request/PR title is `feat(codex/ci): Add ugit CI setup skill`
-- [ ] 1.2 Confirm the change remains repo-local, conventional-title metadata `feat(codex/ci)` stays separate from the OpenSpec change path, and PR-backed CI is optional rather than the default smoke path
+- [x] 1.1 Review the approved OpenSpec artifacts for "Add ugit CI setup Codex skill" and confirm the canonical request/PR title is `feat(codex/ci): Add ugit CI setup skill`
+- [x] 1.2 Confirm the change remains repo-local, conventional-title metadata `feat(codex/ci)` stays separate from the OpenSpec change path, and PR-backed CI is optional rather than the default smoke path
 
 ## 2. Skill Authoring
 
@@ -16,5 +16,14 @@
 
 ## 4. Documentation and Validation
 
-- [ ] 4.1 Add light repository documentation so humans can discover the `ugit-ci-setup` skill and understand that it builds on the existing ugit CLI
-- [ ] 4.2 Run `pnpm fmt`, `pnpm fmt:check`, and, if the implementation adds JS or TS helpers, `pnpm lint`, plus complete at least one concrete smoke exercise that scaffolds a workflow and queues a remote run when a safe target exists
+- [x] 4.1 Add light repository documentation so humans can discover the `ugit-ci-setup` skill and understand that it builds on the existing ugit CLI
+- [x] 4.2 Run `pnpm fmt`, `pnpm fmt:check`, and, if the implementation adds JS or TS helpers, `pnpm lint`, plus complete at least one concrete smoke exercise that scaffolds a workflow and queues a remote run when a safe target exists
+
+## Blockers
+
+- The lane worktree mounts `.codex` read-only, so the materialized skill source
+  is staged under `.codex-staging/skills/ugit-ci-setup` for review instead of
+  the intended `.codex/skills/ugit-ci-setup` path. Remote workflow-run smoke
+  validation also depends on a safe ugit machine config; this lane currently
+  has no `~/.local/share/ugit/config.json`, so the smoke exercise can only
+  verify local scaffolding plus the prerequisite gate.

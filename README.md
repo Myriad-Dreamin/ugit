@@ -33,6 +33,17 @@ ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--d
 
 `ugit workflow logs` streams a manual workflow run's append-only server logs over HTTP-over-SSH until the run finishes.
 
+## Codex skills
+
+This checkout includes staged source for a repo-local `ugit-ci-setup` skill in
+`.codex-staging/skills/ugit-ci-setup`.
+
+Use it when you want Codex to inspect a repository, scaffold
+`.ugit/workflows/<workflow>/`, verify local ugit prerequisites, and optionally
+trigger `ugit workflow run` plus `ugit workflow logs`. The skill builds on the
+existing ugit CLI instead of replacing `ugit create`, `ugit serve`,
+`ugit pr create`, or the workflow commands.
+
 ## Prerequisites for `ugit create`
 
 - Git must be installed and available on `PATH`.

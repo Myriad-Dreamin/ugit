@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -eu
+
+# Workflow packages run from .ugit/workflows/<workflow>, so return to the
+# repository root before executing the confirmed validation command.
+REPO_ROOT="$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)"
+
+cd "$REPO_ROOT"
+
+__UGIT_CI_COMMAND__
