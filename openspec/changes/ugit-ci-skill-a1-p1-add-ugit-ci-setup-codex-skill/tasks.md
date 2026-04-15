@@ -26,9 +26,12 @@
 - This lane also cannot create `.git/worktrees/meow-1/index.lock`, so the
   repo-local `.codex` discovery payload still needs to be synced from a
   writable checkout before task 2.1 can be marked complete.
-- `./scripts/sync-ugit-ci-skill.sh` now copies the authored payload into
-  `.codex/skills/ugit-ci-setup` and stages those files when the checkout is
-  writable.
+- `./scripts/materialize-ugit-ci-skill.sh` now copies the authored payload into
+  any writable destination, so other checkouts can refresh
+  `.codex/skills/ugit-ci-setup` without reimplementing the file list.
+- `./scripts/sync-ugit-ci-skill.sh` now reuses that materialization helper,
+  refreshes `.codex/skills/ugit-ci-setup` before staging, and supports
+  `--skip-git-add` when only the in-place discovery copy needs to be updated.
 - `./scripts/smoke-ugit-ci-skill.sh` now provides a committed read-only-lane
   smoke path by materializing the skill into a temporary writable `.codex`
   tree, reusing `lib/codex-skills.test.ts`, and scaffolding a temporary

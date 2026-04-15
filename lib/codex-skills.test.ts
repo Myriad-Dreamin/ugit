@@ -39,7 +39,7 @@ describe("repo-local Codex skills", () => {
 
       expect(
         existsSync(discoveryPath),
-        `${discoveryPath} is missing; run ./scripts/sync-ugit-ci-skill.sh from a writable checkout so the repo-local skill can be materialized before review`,
+        `${discoveryPath} is missing; run ./scripts/materialize-ugit-ci-skill.sh .codex/skills/ugit-ci-setup from a writable checkout, then rerun ./scripts/sync-ugit-ci-skill.sh if you also need the repo-local skill staged before review`,
       ).toBe(true);
       expect(readFileSync(discoveryPath, "utf8")).toBe(readFileSync(authoredPath, "utf8"));
     }

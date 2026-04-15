@@ -4,7 +4,6 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
-SOURCE_DIR="$REPO_ROOT/skills/ugit-ci-setup"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ugit-ci-skill-smoke.XXXXXX")"
 DISCOVERY_DIR="$TEMP_ROOT/.codex/skills/ugit-ci-setup"
 FIXTURE_REPO="$TEMP_ROOT/repo"
@@ -16,17 +15,7 @@ cleanup() {
 
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$DISCOVERY_DIR/references" "$DISCOVERY_DIR/templates"
-
-for relative_path in \
-  SKILL.md \
-  references/workflow-contract.md \
-  references/remote-validation.md \
-  templates/package.json.template.json \
-  templates/run-ugit-ci.sh.template
-do
-  cp "$SOURCE_DIR/$relative_path" "$DISCOVERY_DIR/$relative_path"
-done
+"$SCRIPT_DIR/materialize-ugit-ci-skill.sh" "$DISCOVERY_DIR"
 
 cd "$REPO_ROOT"
 
@@ -41,11 +30,11 @@ mkdir -p "$WORKFLOW_DIR"
 )
 
 sed "s/__WORKFLOW_NAME__/ci/g" \
-  "$SOURCE_DIR/templates/package.json.template.json" \
+  "$DISCOVERY_DIR/templates/package.json.template.json" \
   > "$WORKFLOW_DIR/package.json"
 
 sed "s|__UGIT_CI_COMMAND__|printf 'smoke-ok\\\\n'|" \
-  "$SOURCE_DIR/templates/run-ugit-ci.sh.template" \
+  "$DISCOVERY_DIR/templates/run-ugit-ci.sh.template" \
   > "$WORKFLOW_DIR/run-ugit-ci.sh"
 
 chmod +x "$WORKFLOW_DIR/run-ugit-ci.sh"

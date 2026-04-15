@@ -12,9 +12,17 @@ Refresh that discovery path from a writable checkout with:
 ./scripts/sync-ugit-ci-skill.sh
 ```
 
-The helper copies the authored payload into `.codex/skills/ugit-ci-setup`,
-stages the repo-local skill files, and fails fast with mount diagnostics when
-`.codex` or `.git` is read-only.
+To materialize the skill into another writable checkout or an arbitrary
+temporary discovery root without staging, run:
+
+```bash
+./scripts/materialize-ugit-ci-skill.sh /path/to/checkout/.codex/skills/ugit-ci-setup
+```
+
+`./scripts/sync-ugit-ci-skill.sh` now reuses that copy helper, stages the
+repo-local skill files, and fails fast with mount diagnostics when `.codex` or
+`.git` is read-only. Pass `--skip-git-add` if you only need the in-place
+`.codex` copy refreshed.
 
 Then validate the repo-local skill with:
 

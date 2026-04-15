@@ -44,11 +44,14 @@ trigger `ugit workflow run` plus `ugit workflow logs`. The skill builds on the
 existing ugit CLI instead of replacing `ugit create`, `ugit serve`,
 `ugit pr create`, or the workflow commands.
 
-Run `./scripts/sync-ugit-ci-skill.sh` from a writable checkout to copy the
-authored payload into `.codex/skills/ugit-ci-setup`, stage those repo-local
-skill files, and then rerun `pnpm exec vitest run lib/codex-skills.test.ts`.
-If your checkout mounts `.codex` or `.git` read-only, the helper stops with
-mount diagnostics so you can retry from a writable checkout before review.
+Run `./scripts/materialize-ugit-ci-skill.sh <destination>` when you need to
+copy the authored payload into a writable Codex discovery root such as another
+checkout or a temporary smoke directory.
+
+Run `./scripts/sync-ugit-ci-skill.sh` from a writable checkout to refresh
+`.codex/skills/ugit-ci-setup`, stage those repo-local skill files, and then
+rerun `pnpm exec vitest run lib/codex-skills.test.ts`. Pass
+`--skip-git-add` when you only need the in-place `.codex` copy refreshed.
 
 Run `./scripts/smoke-ugit-ci-skill.sh` when you need a read-only-lane smoke
 exercise. It materializes the skill into a temporary writable `.codex` path,
