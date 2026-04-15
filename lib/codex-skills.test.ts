@@ -31,7 +31,19 @@ function readCommittedDiscoveryFile(relativePath: (typeof REQUIRED_SKILL_FILES)[
     return execFileSync("git", ["show", `HEAD:${toDiscoveryPath(relativePath)}`], {
       encoding: "utf8",
     });
-  } catch {
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "status" in error &&
+      error.status === 0 &&
+      "stdout" in error &&
+      typeof error.stdout === "string"
+    ) {
+      // Some lane sandboxes report EPERM while still returning successful stdout.
+      return error.stdout;
+    }
+
     return null;
   }
 }

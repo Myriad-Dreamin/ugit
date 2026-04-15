@@ -5,7 +5,7 @@
 
 ## 2. Skill Authoring
 
-- [ ] 2.1 Add `.codex/skills/ugit-ci-setup/SKILL.md` with trigger guidance, progressive-disclosure decision points, and a default workflow for inspection, scaffolding, prerequisite checks, and optional remote validation
+- [x] 2.1 Add `.codex/skills/ugit-ci-setup/SKILL.md` with trigger guidance, progressive-disclosure decision points, and a default workflow for inspection, scaffolding, prerequisite checks, and optional remote validation
 - [x] 2.2 Add only the minimal supporting references, templates, or helper assets needed to scaffold `.ugit/workflows/<workflow>/` packages around the documented `ugit:ci` contract
 
 ## 3. Scaffolding and Verification Flow
