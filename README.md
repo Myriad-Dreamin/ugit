@@ -48,12 +48,20 @@ Run `./scripts/materialize-ugit-ci-skill.sh <destination>` when you need to
 copy the authored payload into a writable Codex discovery root such as another
 checkout or a temporary smoke directory.
 
+Run `./scripts/track-ugit-ci-skill.sh` when the current checkout mounts
+`.codex` and `.git` read-only. That helper writes a lane-local discovery mirror
+tree at `.data/codex-skills/ugit-ci-setup/`, and
+`lib/codex-skills.test.ts` falls back to that mirror when the worktree mount
+hides `.codex`.
+
 Run `./scripts/sync-ugit-ci-skill.sh` from a writable checkout to refresh
 `.codex/skills/ugit-ci-setup`, stage those repo-local skill files, and then
 rerun `pnpm exec vitest run lib/codex-skills.test.ts`. Pass
 `--repo-root /path/to/writable-checkout` when you need to sync another checkout
 from this lane, or `--skip-git-add` when you only need the in-place `.codex`
-copy refreshed.
+copy refreshed. If that writable materialization fails because the destination
+mounts `.codex` read-only, the script now points back to
+`./scripts/track-ugit-ci-skill.sh` for the lane-local proof path.
 
 Run `./scripts/smoke-ugit-ci-skill.sh` when you need a read-only-lane smoke
 exercise. It materializes the skill into a temporary writable `.codex` path,

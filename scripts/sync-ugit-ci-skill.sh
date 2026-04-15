@@ -42,7 +42,11 @@ cd "$REPO_ROOT"
 
 DISCOVERY_DESTINATION="$TARGET_REPO_ROOT/$DISCOVERY_PREFIX"
 
-"$SCRIPT_DIR/materialize-ugit-ci-skill.sh" "$DISCOVERY_DESTINATION"
+if ! "$SCRIPT_DIR/materialize-ugit-ci-skill.sh" "$DISCOVERY_DESTINATION"; then
+  echo "If the destination checkout mounts .codex or .git read-only, write the lane-local discovery mirror instead:" >&2
+  echo "  ./scripts/track-ugit-ci-skill.sh --repo-root $TARGET_REPO_ROOT" >&2
+  exit 1
+fi
 
 if [ "$SKIP_GIT_ADD" -eq 1 ]; then
   echo "Skipped git add for $DISCOVERY_DESTINATION"

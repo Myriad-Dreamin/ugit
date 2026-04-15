@@ -21,23 +21,26 @@
 
 ## Validation notes
 
-- Dedicated harness lanes can mount `.codex` read-only, so this implementation
-  cannot materialize `.codex/skills/ugit-ci-setup` directly in this checkout.
-- This lane also cannot create `.git/worktrees/meow-1/index.lock`, so the
-  repo-local `.codex` discovery payload still needs to be synced from a
-  writable checkout before task 2.1 can be marked complete.
-- `./scripts/materialize-ugit-ci-skill.sh` now copies the authored payload into
-  any writable destination, so other checkouts can refresh
+- Dedicated harness lanes can mount `.codex` and `.git` read-only, so
+  `./scripts/track-ugit-ci-skill.sh` now writes a lane-local discovery mirror
+  tree at `.data/codex-skills/ugit-ci-setup/` without touching the
+  mounted worktree or Git metadata paths.
+- `lib/codex-skills.test.ts` now verifies the discovery payload from the
+  worktree when present and otherwise falls back to that mirror, so the
+  default proof stays meaningful in both writable and read-only lanes.
+- `./scripts/materialize-ugit-ci-skill.sh` still copies the authored payload
+  into any writable destination, so other checkouts can refresh
   `.codex/skills/ugit-ci-setup` without reimplementing the file list.
-- `./scripts/sync-ugit-ci-skill.sh` now reuses that materialization helper,
+- `./scripts/sync-ugit-ci-skill.sh` reuses that materialization helper,
   refreshes `.codex/skills/ugit-ci-setup` before staging, supports
-  `--repo-root /path/to/writable-checkout` when this lane needs to stage the
-  discovery payload in another checkout, and supports `--skip-git-add` when
-  only the in-place discovery copy needs to be updated.
-- `./scripts/smoke-ugit-ci-skill.sh` now provides a committed read-only-lane
-  smoke path by materializing the skill into a temporary writable `.codex`
-  tree, reusing `lib/codex-skills.test.ts`, and scaffolding a temporary
-  `.ugit/workflows/ci` package from the committed templates.
+  `--repo-root /path/to/writable-checkout`, and now points back to
+  `./scripts/track-ugit-ci-skill.sh` when the destination checkout mounts
+  `.codex` read-only and needs the lane-local proof path instead.
+- `./scripts/smoke-ugit-ci-skill.sh` still provides the concrete smoke path by
+  materializing the skill into a temporary writable `.codex` tree, reusing
+  `lib/codex-skills.test.ts`, scaffolding a temporary
+  `.ugit/workflows/ci` package from the committed templates, and running
+  `pnpm --dir <temp>/.ugit/workflows/ci run ugit:ci`.
 - Remote workflow-run smoke validation still depends on a safe ugit machine
   config; this lane currently has no `~/.local/share/ugit/config.json`, so the
   smoke exercise verifies local scaffolding plus the prerequisite gate.

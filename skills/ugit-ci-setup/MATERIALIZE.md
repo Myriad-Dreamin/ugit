@@ -6,6 +6,13 @@ skill. The repo-local discovery path remains `.codex/skills/ugit-ci-setup/`.
 This branch is only complete when the same required files also exist under
 `.codex/skills/ugit-ci-setup`.
 
+If the current checkout mounts `.codex` and `.git` read-only, write a
+lane-local discovery mirror with:
+
+```bash
+./scripts/track-ugit-ci-skill.sh
+```
+
 Refresh that discovery path from a writable checkout with:
 
 ```bash
@@ -27,8 +34,14 @@ temporary discovery root without staging, run:
 
 `./scripts/sync-ugit-ci-skill.sh` now reuses that copy helper, can target
 another checkout with `--repo-root`, stages the repo-local skill files, and
-fails fast with mount diagnostics when `.codex` or `.git` is read-only. Pass
-`--skip-git-add` if you only need the in-place `.codex` copy refreshed.
+points back to `./scripts/track-ugit-ci-skill.sh` when `.codex` is mounted
+read-only. Pass `--skip-git-add` if you only need the in-place `.codex` copy
+refreshed.
+
+`./scripts/track-ugit-ci-skill.sh` writes a lane-local discovery mirror tree
+at `.data/codex-skills/ugit-ci-setup/` without touching the mounted
+`.codex` or `.git` paths. `lib/codex-skills.test.ts` falls back to that mirror
+when the read-only lane hides `.codex`.
 
 Then validate the repo-local skill with:
 
