@@ -26,13 +26,29 @@ export type ValidatedWorkflowRunRequest = Readonly<{
   workflowName: string;
 }>;
 
-export type ValidatedWorkflowLogsRequest = Readonly<{
+export type ValidatedWorkflowRunListRequest = Readonly<{
+  repositoryName: string;
+  repositoryPath: string;
+}>;
+
+export type ValidatedWorkflowRunDetailRequest = Readonly<{
+  repositoryName: string;
+  repositoryPath: string;
   workflowId: string;
 }>;
 
-export type ValidateWorkflowRunRequestOptions = Readonly<{
+export type ValidatedWorkflowLogsRequest = Readonly<{
+  workflowId: string;
+  repositoryName: string | null;
+  repositoryPath: string | null;
+  offset: number;
+}>;
+
+export type ValidateWorkflowRequestOptions = Readonly<{
   cwd?: string;
 }>;
+
+export type ValidateWorkflowRunRequestOptions = ValidateWorkflowRequestOptions;
 
 export function validateWorkflowRunRequest(
   payload: unknown,
@@ -61,9 +77,47 @@ export function validateWorkflowRunRequest(
   };
 }
 
-export function validateWorkflowLogsRequest(workflowId: unknown): ValidatedWorkflowLogsRequest {
+export function validateWorkflowRunListRequest(
+  payload: unknown,
+  options: ValidateWorkflowRequestOptions = {},
+): ValidatedWorkflowRunListRequest {
+  const request = asRecord(payload, "The workflow-run list payload");
+
+  return normalizeRepositoryTarget(
+    readRequiredString(request.repositoryPath, "repositoryPath"),
+    options.cwd,
+  );
+}
+
+export function validateWorkflowRunDetailRequest(
+  payload: unknown,
+  options: ValidateWorkflowRequestOptions = {},
+): ValidatedWorkflowRunDetailRequest {
+  const request = asRecord(payload, "The workflow-run detail payload");
+  const repository = normalizeRepositoryTarget(
+    readRequiredString(request.repositoryPath, "repositoryPath"),
+    options.cwd,
+  );
+
   return {
-    workflowId: readRequiredString(workflowId, "workflowId"),
+    ...repository,
+    workflowId: readRequiredString(request.workflowId, "workflowId"),
+  };
+}
+
+export function validateWorkflowLogsRequest(
+  payload: unknown,
+  options: ValidateWorkflowRequestOptions = {},
+): ValidatedWorkflowLogsRequest {
+  const request = asRecord(payload, "The workflow-log payload");
+  const repositoryPath = readOptionalString(request.repositoryPath, "repositoryPath");
+  const repository = repositoryPath ? normalizeRepositoryTarget(repositoryPath, options.cwd) : null;
+
+  return {
+    workflowId: readRequiredString(request.workflowId, "workflowId"),
+    repositoryName: repository?.repositoryName ?? null,
+    repositoryPath: repository?.repositoryPath ?? null,
+    offset: readNonNegativeInteger(request.offset, "offset"),
   };
 }
 
@@ -151,6 +205,25 @@ function readOptionalString(value: unknown, label: string): string | undefined {
   }
 
   return readString(value, label);
+}
+
+function readNonNegativeInteger(value: unknown, label: string): number {
+  if (value === undefined || value === null || value === "") {
+    return 0;
+  }
+
+  const integerValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim().length > 0
+        ? Number(value)
+        : Number.NaN;
+
+  if (!Number.isInteger(integerValue) || integerValue < 0) {
+    throw new WorkflowRunRequestError(`${label} must be a non-negative integer.`, 400);
+  }
+
+  return integerValue;
 }
 
 function readString(value: unknown, label: string): string {

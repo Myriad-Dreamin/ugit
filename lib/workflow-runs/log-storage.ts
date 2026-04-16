@@ -35,6 +35,13 @@ export function appendWorkflowRunLog(logPath: string, content: string): void {
   appendFileSync(logPath, content, "utf8");
 }
 
+export function readWorkflowRunLogSnapshot(logPath: string): Readonly<{
+  nextOffset: number;
+  text: string;
+}> {
+  return readWorkflowRunLogChunk(logPath, 0);
+}
+
 export function readWorkflowRunLogChunk(
   logPath: string,
   offset: number,

@@ -7,9 +7,11 @@ import type { ValidatedPullRequestSyncRequest } from "@/lib/pr-runner/validation
 import type { ValidatedWorkflowRunRequest } from "@/lib/workflow-runs/validation";
 import {
   claimRunnableExecutions,
+  listWorkflowRuns,
   queuePullRequestSynchronization,
   queueWorkflowRun,
   readWorkflowRun,
+  readWorkflowRunForRepository,
 } from "@/lib/pr-runner/storage";
 
 const workspaces: string[] = [];
@@ -101,6 +103,61 @@ describe("claimRunnableExecutions", () => {
         repositoryPath: repositoryB,
       }),
     ]);
+  });
+});
+
+describe("repo-scoped workflow run reads", () => {
+  it("lists only workflow runs for the requested repository in reverse update order", () => {
+    const workspace = createWorkspace();
+    const repositoryA = createRepositorySkeleton(workspace, "alpha");
+    const repositoryB = createRepositorySkeleton(workspace, "beta");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queueWorkflowRun(createWorkflowRequest(repositoryA, "abcdef1", "lint"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+    });
+    queueWorkflowRun(createWorkflowRequest(repositoryB, "abcdef2", "test"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      workflowIdFactory: createIdFactory("workflow-2"),
+    });
+    queueWorkflowRun(createWorkflowRequest(repositoryA, "abcdef3", "release"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      workflowIdFactory: createIdFactory("workflow-3"),
+    });
+
+    expect(listWorkflowRuns(repositoryA, { storage })).toMatchObject([
+      {
+        id: "workflow-3",
+        repositoryPath: repositoryA,
+      },
+      {
+        id: "workflow-1",
+        repositoryPath: repositoryA,
+      },
+    ]);
+  });
+
+  it("returns null when a workflow id belongs to another repository", () => {
+    const workspace = createWorkspace();
+    const repositoryA = createRepositorySkeleton(workspace, "alpha");
+    const repositoryB = createRepositorySkeleton(workspace, "beta");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queueWorkflowRun(createWorkflowRequest(repositoryA, "abcdef1", "lint"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+    });
+
+    expect(readWorkflowRunForRepository(repositoryB, "workflow-1", storage)).toBeNull();
   });
 });
 

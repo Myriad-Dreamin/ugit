@@ -25,11 +25,17 @@ describe("GET /api/workflows/logs", () => {
     );
 
     const response = await GET(
-      new Request("http://localhost/api/workflows/logs?workflowId=workflow-1"),
+      new Request(
+        "http://localhost/api/workflows/logs?workflowId=workflow-1&repositoryPath=%2Frepos%2Falpha&offset=24",
+      ),
     );
 
     expect(response.status).toBe(200);
-    expect(mockedStreamWorkflowRunLogs).toHaveBeenCalledWith("workflow-1");
+    expect(mockedStreamWorkflowRunLogs).toHaveBeenCalledWith({
+      workflowId: "workflow-1",
+      repositoryPath: "/repos/alpha",
+      offset: "24",
+    });
     await expect(response.text()).resolves.toBe("queued\nrunning\n");
   });
 });

@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { configuredOwner, getRepositoryHref, isConfiguredOwner } from "@/lib/owner";
+import {
+  configuredOwner,
+  getRepositoryHref,
+  getRepositoryWorkflowsHref,
+  isConfiguredOwner,
+} from "@/lib/owner";
 import { getRepositoryByName, listRepositoryRootEntries } from "@/lib/repositories";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +34,7 @@ export default async function RepositoryPage({ params }: RepositoryPageProps) {
 
   const entries = listRepositoryRootEntries(repository);
   const repositoryHref = getRepositoryHref(repository.name);
+  const repositoryWorkflowsHref = getRepositoryWorkflowsHref(repository.name);
 
   return (
     <main className="page-shell">
@@ -37,6 +43,11 @@ export default async function RepositoryPage({ params }: RepositoryPageProps) {
         <p className="page-link-row">
           <Link href="/" className="page-link">
             Back to repositories
+          </Link>
+        </p>
+        <p className="page-link-row">
+          <Link href={repositoryWorkflowsHref} className="page-link">
+            View workflow runs
           </Link>
         </p>
         <h1 id="repository-heading">

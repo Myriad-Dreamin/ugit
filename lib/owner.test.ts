@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { configuredOwner, getRepositoryHref, isConfiguredOwner } from "@/lib/owner";
+import {
+  configuredOwner,
+  getRepositoryHref,
+  getRepositoryWorkflowsHref,
+  getWorkflowRunHref,
+  isConfiguredOwner,
+} from "@/lib/owner";
 
 describe("configuredOwner", () => {
   it("keeps the checked-in single-user configuration", () => {
@@ -21,5 +27,14 @@ describe("getRepositoryHref", () => {
   it("builds the canonical per-repository route for the configured owner", () => {
     expect(getRepositoryHref("repo-x")).toBe("/Myriad-Dreamin/repo-x");
     expect(getRepositoryHref("repo with spaces")).toBe("/Myriad-Dreamin/repo%20with%20spaces");
+  });
+});
+
+describe("workflow href helpers", () => {
+  it("builds canonical repository workflow routes", () => {
+    expect(getRepositoryWorkflowsHref("repo-x")).toBe("/Myriad-Dreamin/repo-x/workflows");
+    expect(getWorkflowRunHref("repo-x", "workflow 1")).toBe(
+      "/Myriad-Dreamin/repo-x/workflows/workflow%201",
+    );
   });
 });
