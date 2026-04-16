@@ -7,10 +7,13 @@ import { completeWorkflowRun, readWorkflowRun } from "@/lib/pr-runner/storage";
 import { resetStorageCacheForTests } from "@/lib/storage/sqlite";
 import { appendWorkflowRunLog } from "@/lib/workflow-runs/log-storage";
 import {
+  getWorkflowRun,
+  listWorkflowRuns,
   queueWorkflowRun,
   streamWorkflowRunLogs,
   type WorkflowRunServiceOptions,
 } from "@/lib/workflow-runs/service";
+import { WorkflowRunRequestError } from "@/lib/workflow-runs/validation";
 
 const workspaces: string[] = [];
 const mockedNudgeRunner = vi.fn();
@@ -70,6 +73,71 @@ describe("queueWorkflowRun service", () => {
   });
 });
 
+describe("repo-scoped workflow services", () => {
+  it("lists repository workflow summaries through the shared service DTO", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queueWorkflowRun(createPayload(repositoryPath), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+      nudgeRunner: mockedNudgeRunner,
+    });
+
+    expect(
+      listWorkflowRuns(
+        {
+          repositoryPath,
+        },
+        {
+          cwd: workspace,
+          storage,
+        },
+      ),
+    ).toEqual({
+      repositoryName: "alpha",
+      workflowRuns: [
+        expect.objectContaining({
+          id: "workflow-1",
+          workflowName: "lint",
+          status: "queued",
+        }),
+      ],
+    });
+  });
+
+  it("rejects repo-scoped detail reads for workflow ids owned by another repository", () => {
+    const workspace = createWorkspace();
+    const repositoryA = createRepositorySkeleton(workspace, "alpha");
+    const repositoryB = createRepositorySkeleton(workspace, "beta");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queueWorkflowRun(createPayload(repositoryA), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+      nudgeRunner: mockedNudgeRunner,
+    });
+
+    expect(() =>
+      getWorkflowRun(
+        {
+          repositoryPath: repositoryB,
+          workflowId: "workflow-1",
+        },
+        {
+          cwd: workspace,
+          storage,
+        },
+      ),
+    ).toThrowError(WorkflowRunRequestError);
+  });
+});
+
 describe("streamWorkflowRunLogs service", () => {
   it("streams queued logs and follows appended output until the workflow completes", async () => {
     const workspace = createWorkspace();
@@ -102,7 +170,13 @@ describe("streamWorkflowRunLogs service", () => {
 
     await expect(
       readStream(
-        streamWorkflowRunLogs(queued.workflowId, createServiceOptions(workspace, storage)),
+        streamWorkflowRunLogs(
+          {
+            workflowId: queued.workflowId,
+            repositoryPath,
+          },
+          createServiceOptions(workspace, storage),
+        ),
       ),
     ).resolves.toContain("running\n");
   });

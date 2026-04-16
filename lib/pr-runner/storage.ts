@@ -144,6 +144,10 @@ export type ListPullRequestsOptions = Readonly<{
   storage?: StorageOptions | string;
 }>;
 
+export type ListWorkflowRunsOptions = Readonly<{
+  storage?: StorageOptions | string;
+}>;
+
 export type UpdatePullRequestOptions = Readonly<{
   now?: () => Date;
   storage?: StorageOptions | string;
@@ -1099,6 +1103,40 @@ export function readWorkflowRun(
   return withStorage(storage, (database) => readWorkflowRunById(database, workflowId));
 }
 
+export function readWorkflowRunForRepository(
+  repositoryPath: string,
+  workflowId: string,
+  storage: StorageOptions | string | undefined = undefined,
+): WorkflowRunRecord | null {
+  ensurePullRequestStorage(storage);
+
+  return withStorage(storage, (database) =>
+    readWorkflowRunByRepository(database, repositoryPath, workflowId),
+  );
+}
+
+export function listWorkflowRuns(
+  repositoryPath: string,
+  options: ListWorkflowRunsOptions = {},
+): readonly WorkflowRunRecord[] {
+  ensurePullRequestStorage(options.storage);
+
+  return withStorage(options.storage, (database) => {
+    const rows = database
+      .prepare<[string], WorkflowRunRow>(
+        `
+          SELECT *
+          FROM workflow_runs
+          WHERE repository_path = ?
+          ORDER BY updated_at DESC, id DESC
+        `,
+      )
+      .all(repositoryPath);
+
+    return rows.map(toWorkflowRunRecord);
+  });
+}
+
 export function listPullRequests(
   repositoryPath: string,
   options: ListPullRequestsOptions = {},
@@ -1366,6 +1404,24 @@ function readWorkflowRunById(database: DatabaseSync, workflowId: string): Workfl
       `,
     )
     .get(workflowId);
+
+  return row ? toWorkflowRunRecord(row) : null;
+}
+
+function readWorkflowRunByRepository(
+  database: DatabaseSync,
+  repositoryPath: string,
+  workflowId: string,
+): WorkflowRunRecord | null {
+  const row = database
+    .prepare<[string, string], WorkflowRunRow>(
+      `
+        SELECT *
+        FROM workflow_runs
+        WHERE repository_path = ? AND id = ?
+      `,
+    )
+    .get(repositoryPath, workflowId);
 
   return row ? toWorkflowRunRecord(row) : null;
 }

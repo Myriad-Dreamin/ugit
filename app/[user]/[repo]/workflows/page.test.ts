@@ -1,6 +1,11 @@
+import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const NEXT_NOT_FOUND_ERROR = "NEXT_NOT_FOUND";
+
+const { mockedWorkflowRunsListClient } = vi.hoisted(() => ({
+  mockedWorkflowRunsListClient: vi.fn(() => null),
+}));
 
 vi.mock("next/navigation", () => ({
   notFound: vi.fn(() => {
@@ -19,12 +24,20 @@ vi.mock("@/lib/owner", () => ({
 
 vi.mock("@/lib/repositories", () => ({
   getRepositoryByName: vi.fn(),
-  listRepositoryRootEntries: vi.fn(),
 }));
 
-import RepositoryPage from "@/app/[user]/[repo]/page";
+vi.mock("@/lib/workflow-runs/service", () => ({
+  listWorkflowRuns: vi.fn(),
+}));
+
+vi.mock("@/app/[user]/[repo]/workflows/workflow-runs-list-client", () => ({
+  WorkflowRunsListClient: mockedWorkflowRunsListClient,
+}));
+
+import RepositoryWorkflowsPage from "@/app/[user]/[repo]/workflows/page";
 import { getRepositoryHref, getRepositoryWorkflowsHref, isConfiguredOwner } from "@/lib/owner";
-import { getRepositoryByName, listRepositoryRootEntries } from "@/lib/repositories";
+import { getRepositoryByName } from "@/lib/repositories";
+import { listWorkflowRuns } from "@/lib/workflow-runs/service";
 import { notFound } from "next/navigation";
 
 const mockedNotFound = vi.mocked(notFound);
@@ -32,15 +45,16 @@ const mockedGetRepositoryByName = vi.mocked(getRepositoryByName);
 const mockedGetRepositoryHref = vi.mocked(getRepositoryHref);
 const mockedGetRepositoryWorkflowsHref = vi.mocked(getRepositoryWorkflowsHref);
 const mockedIsConfiguredOwner = vi.mocked(isConfiguredOwner);
-const mockedListRepositoryRootEntries = vi.mocked(listRepositoryRootEntries);
+const mockedListWorkflowRuns = vi.mocked(listWorkflowRuns);
 
-describe("RepositoryPage", () => {
+describe("RepositoryWorkflowsPage", () => {
   beforeEach(() => {
     mockedNotFound.mockClear();
     mockedNotFound.mockImplementation(() => {
       throw new Error(NEXT_NOT_FOUND_ERROR);
     });
 
+    mockedWorkflowRunsListClient.mockClear();
     mockedGetRepositoryByName.mockReset();
     mockedGetRepositoryHref.mockReset();
     mockedGetRepositoryHref.mockImplementation((repositoryName) => {
@@ -51,14 +65,14 @@ describe("RepositoryPage", () => {
       return `/Myriad-Dreamin/${repositoryName}/workflows`;
     });
     mockedIsConfiguredOwner.mockReset();
-    mockedListRepositoryRootEntries.mockReset();
+    mockedListWorkflowRuns.mockReset();
   });
 
   it("calls notFound for unsupported users", async () => {
     mockedIsConfiguredOwner.mockReturnValue(false);
 
     await expect(
-      RepositoryPage({
+      RepositoryWorkflowsPage({
         params: {
           user: "someone-else",
           repo: "example-repo",
@@ -75,7 +89,7 @@ describe("RepositoryPage", () => {
     mockedGetRepositoryByName.mockReturnValue(null);
 
     await expect(
-      RepositoryPage({
+      RepositoryWorkflowsPage({
         params: {
           user: "Myriad-Dreamin",
           repo: "missing-repo",
@@ -87,7 +101,7 @@ describe("RepositoryPage", () => {
     expect(mockedNotFound).toHaveBeenCalledTimes(1);
   });
 
-  it("loads the repository root entries for valid routes", async () => {
+  it("wires the repository workflow summaries into the live client component", async () => {
     mockedIsConfiguredOwner.mockReturnValue(true);
 
     const repository = {
@@ -97,28 +111,61 @@ describe("RepositoryPage", () => {
     };
 
     mockedGetRepositoryByName.mockReturnValue(repository);
-    mockedListRepositoryRootEntries.mockReturnValue([
-      {
-        kind: "file",
-        name: "README.md",
-        path: "/tmp/example-repo/README.md",
-        relativePath: ".data/repos/example-repo/README.md",
-      },
-    ]);
+    mockedListWorkflowRuns.mockReturnValue({
+      repositoryName: "example-repo",
+      workflowRuns: [],
+    });
 
-    const page = await RepositoryPage({
-      params: Promise.resolve({
+    const page = await RepositoryWorkflowsPage({
+      params: {
         user: "Myriad-Dreamin",
         repo: "example-repo",
-      }),
+      },
     });
+    const workflowRunsClient = findElementByType(page, mockedWorkflowRunsListClient);
 
     expect(page).toMatchObject({
       type: "main",
     });
-    expect(mockedGetRepositoryByName).toHaveBeenCalledWith("example-repo");
-    expect(mockedListRepositoryRootEntries).toHaveBeenCalledWith(repository);
-    expect(mockedGetRepositoryHref).toHaveBeenCalledWith("example-repo");
-    expect(mockedGetRepositoryWorkflowsHref).toHaveBeenCalledWith("example-repo");
+    expect(mockedListWorkflowRuns).toHaveBeenCalledWith({
+      repositoryPath: "/tmp/example-repo",
+    });
+    expect(workflowRunsClient?.props).toMatchObject({
+      initialWorkflowRuns: [],
+      repositoryName: "example-repo",
+      repositoryPath: "/tmp/example-repo",
+    });
   });
 });
+
+type ElementWithChildren = ReactElement<{ children?: unknown }>;
+
+function findElementByType(node: unknown, type: unknown): ElementWithChildren | null {
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+
+  if ("type" in node && (node as ElementWithChildren).type === type) {
+    return node as ElementWithChildren;
+  }
+
+  if (!("props" in node)) {
+    return null;
+  }
+
+  const children = (node as ElementWithChildren).props?.children;
+
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      const found = findElementByType(child, type);
+
+      if (found) {
+        return found;
+      }
+    }
+
+    return null;
+  }
+
+  return findElementByType(children, type);
+}

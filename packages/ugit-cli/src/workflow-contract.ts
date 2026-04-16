@@ -15,5 +15,30 @@ export type QueueWorkflowRunResponse = {
   commitHash: string;
 };
 
+export type WorkflowRunSummary = {
+  id: string;
+  repositoryName: string;
+  repositoryPath: string;
+  branchName: string;
+  commitHash: string;
+  workflowName: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export type ListWorkflowRunsResponse = {
+  repositoryName: string;
+  workflowRuns: readonly WorkflowRunSummary[];
+};
+
+export type WorkflowRunDetailResponse = {
+  repositoryName: string;
+  workflowRun: WorkflowRunSummary;
+};
+
 export const WORKFLOW_RUNS_PATH = "/api/workflows/runs";
 export const WORKFLOW_LOGS_PATH = "/api/workflows/logs";

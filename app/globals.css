@@ -106,6 +106,17 @@ body {
   text-decoration: underline;
 }
 
+.page-link-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.page-link-separator {
+  color: var(--text-muted);
+}
+
 .repositories-panel {
   margin-top: 28px;
   padding: 22px;
@@ -233,6 +244,169 @@ body {
   font-size: 0.9rem;
 }
 
+.workflow-live-note,
+.workflow-error-note,
+.workflow-run-error {
+  margin: 18px 0 0;
+  font-size: 0.95rem;
+}
+
+.workflow-live-note {
+  color: var(--text-muted);
+}
+
+.workflow-error-note,
+.workflow-run-error {
+  color: var(--accent);
+}
+
+.workflow-run-list {
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 14px;
+}
+
+.workflow-run-card {
+  display: block;
+  padding: 18px;
+  border-radius: 16px;
+  background: rgba(255, 252, 247, 0.86);
+  border: 1px solid rgba(117, 79, 36, 0.14);
+  color: inherit;
+  text-decoration: none;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.workflow-run-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(165, 73, 22, 0.3);
+  box-shadow: 0 16px 28px rgba(84, 49, 18, 0.1);
+}
+
+.workflow-run-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workflow-run-name,
+.workflow-run-id,
+.workflow-detail-label,
+.workflow-detail-value,
+.workflow-run-meta dt,
+.workflow-run-meta dd {
+  margin: 0;
+}
+
+.workflow-run-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.workflow-run-id {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-family: "SFMono-Regular", "SF Mono", "Cascadia Code", monospace;
+  font-size: 0.88rem;
+  word-break: break-all;
+}
+
+.workflow-run-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 92px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.workflow-run-status[data-status="queued"] {
+  background: rgba(189, 126, 44, 0.16);
+  color: #8b4e0d;
+}
+
+.workflow-run-status[data-status="running"] {
+  background: rgba(36, 99, 145, 0.14);
+  color: #124d73;
+}
+
+.workflow-run-status[data-status="succeeded"] {
+  background: rgba(43, 122, 84, 0.16);
+  color: #1f6b47;
+}
+
+.workflow-run-status[data-status="failed"] {
+  background: rgba(166, 55, 45, 0.16);
+  color: #8d2219;
+}
+
+.workflow-run-meta {
+  margin: 18px 0 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+}
+
+.workflow-run-meta dt,
+.workflow-detail-label {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.workflow-run-meta dd,
+.workflow-detail-value {
+  margin-top: 6px;
+  font-size: 0.96rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.workflow-detail-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.workflow-detail-card {
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: rgba(255, 252, 247, 0.86);
+  border: 1px solid rgba(117, 79, 36, 0.14);
+}
+
+.workflow-log-panel {
+  margin-top: 22px;
+}
+
+.workflow-log-output {
+  margin: 18px 0 0;
+  padding: 18px;
+  border-radius: 16px;
+  background: #24180c;
+  color: #fff5e8;
+  font-family: "SFMono-Regular", "SF Mono", "Cascadia Code", monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .empty-state {
   margin: 18px 0 0;
   color: var(--text-muted);
@@ -249,11 +423,18 @@ body {
   }
 
   .repository-item,
-  .entry-item {
+  .entry-item,
+  .workflow-detail-grid,
+  .workflow-run-meta {
     grid-template-columns: 1fr;
   }
 
   .repositories-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .workflow-run-heading {
     flex-direction: column;
     align-items: flex-start;
   }

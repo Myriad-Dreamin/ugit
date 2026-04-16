@@ -1,21 +1,30 @@
-import { streamWorkflowRunLogs } from "@/lib/workflow-runs/service";
+import { getWorkflowRun } from "@/lib/workflow-runs/service";
 import { WorkflowRunRequestError } from "@/lib/workflow-runs/validation";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request): Promise<Response> {
+type WorkflowRunRouteContext = Readonly<{
+  params:
+    | Promise<{
+        workflowId: string;
+      }>
+    | {
+        workflowId: string;
+      };
+}>;
+
+export async function GET(request: Request, context: WorkflowRunRouteContext): Promise<Response> {
   try {
     const url = new URL(request.url);
-    const stream = streamWorkflowRunLogs({
-      workflowId: url.searchParams.get("workflowId"),
+    const { workflowId } = await Promise.resolve(context.params);
+    const response = getWorkflowRun({
       repositoryPath: url.searchParams.get("repositoryPath"),
-      offset: url.searchParams.get("offset"),
+      workflowId,
     });
 
-    return new Response(stream, {
+    return Response.json(response, {
       headers: {
         "cache-control": "no-store",
-        "content-type": "text/plain; charset=utf-8",
       },
     });
   } catch (error) {
@@ -30,7 +39,7 @@ export async function GET(request: Request): Promise<Response> {
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Unexpected workflow-log failure.",
+        error: error instanceof Error ? error.message : "Unexpected workflow-run read failure.",
       },
       { status: 500 },
     );
