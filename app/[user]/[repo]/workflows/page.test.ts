@@ -133,12 +133,12 @@ describe("RepositoryWorkflowsPage", () => {
     expect(workflowRunsClient?.props).toMatchObject({
       initialWorkflowRuns: [],
       repositoryName: "example-repo",
-      repositoryPath: "/tmp/example-repo",
     });
+    expect(workflowRunsClient?.props).not.toHaveProperty("repositoryPath");
   });
 });
 
-type ElementWithChildren = ReactElement<{ children?: unknown }>;
+type ElementWithChildren = ReactElement<Record<string, unknown> & { children?: unknown }>;
 
 function findElementByType(node: unknown, type: unknown): ElementWithChildren | null {
   if (!node || typeof node !== "object") {

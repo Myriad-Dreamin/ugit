@@ -127,7 +127,6 @@ describe("WorkflowRunPage", () => {
       workflowRun: {
         id: "workflow-1",
         repositoryName: "example-repo",
-        repositoryPath: "/tmp/example-repo",
         branchName: "feature/test",
         commitHash: "abcdef1",
         workflowName: "lint",
@@ -163,12 +162,13 @@ describe("WorkflowRunPage", () => {
         id: "workflow-1",
         workflowName: "lint",
       }),
-      repositoryPath: "/tmp/example-repo",
     });
+    expect(workflowRunDetailClient?.props).not.toHaveProperty("repositoryPath");
+    expect(workflowRunDetailClient?.props.initialWorkflowRun).not.toHaveProperty("repositoryPath");
   });
 });
 
-type ElementWithChildren = ReactElement<{ children?: unknown }>;
+type ElementWithChildren = ReactElement<Record<string, unknown> & { children?: unknown }>;
 
 function findElementByType(node: unknown, type: unknown): ElementWithChildren | null {
   if (!node || typeof node !== "object") {

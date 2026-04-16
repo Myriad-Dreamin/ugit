@@ -18,20 +18,18 @@ const WORKFLOW_RUN_POLL_INTERVAL_MS = 3_000;
 type WorkflowRunsListClientProps = Readonly<{
   initialWorkflowRuns: readonly WorkflowRunSummary[];
   repositoryName: string;
-  repositoryPath: string;
 }>;
 
 export function WorkflowRunsListClient({
   initialWorkflowRuns,
   repositoryName,
-  repositoryPath,
 }: WorkflowRunsListClientProps) {
   const [workflowRuns, setWorkflowRuns] = useState(initialWorkflowRuns);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const refreshWorkflowRuns = useEffectEvent(async () => {
     const searchParams = new URLSearchParams({
-      repositoryPath,
+      repositoryName,
     });
     const response = await fetch(`/api/workflows/runs?${searchParams.toString()}`, {
       cache: "no-store",
@@ -69,7 +67,7 @@ export function WorkflowRunsListClient({
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [repositoryPath]);
+  }, [repositoryName]);
 
   const activeRunCount = workflowRuns.filter((workflowRun) =>
     isWorkflowRunActive(workflowRun.status),

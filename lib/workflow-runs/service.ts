@@ -254,7 +254,6 @@ function toWorkflowRunSummary(record: WorkflowRunRecord): WorkflowRunSummary {
   return {
     id: record.id,
     repositoryName: record.repositoryName,
-    repositoryPath: record.repositoryPath,
     branchName: record.branchName,
     commitHash: record.commitHash,
     workflowName: record.workflowName,
