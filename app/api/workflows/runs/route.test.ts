@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/lib/repositories", () => ({
-  getRepositoryByName: vi.fn(),
-}));
+import { WorkflowRunRequestError } from "@/lib/workflow-runs/validation";
 
 vi.mock("@/lib/workflow-runs/service", () => ({
   listWorkflowRuns: vi.fn(),
@@ -10,25 +7,17 @@ vi.mock("@/lib/workflow-runs/service", () => ({
 }));
 
 import { GET, POST } from "@/app/api/workflows/runs/route";
-import { getRepositoryByName } from "@/lib/repositories";
 import { listWorkflowRuns, queueWorkflowRun } from "@/lib/workflow-runs/service";
 
-const mockedGetRepositoryByName = vi.mocked(getRepositoryByName);
 const mockedListWorkflowRuns = vi.mocked(listWorkflowRuns);
 const mockedQueueWorkflowRun = vi.mocked(queueWorkflowRun);
 
 describe("GET /api/workflows/runs", () => {
   beforeEach(() => {
-    mockedGetRepositoryByName.mockReset();
     mockedListWorkflowRuns.mockReset();
   });
 
   it("returns repo-scoped workflow summaries as JSON", async () => {
-    mockedGetRepositoryByName.mockReturnValue({
-      name: "alpha",
-      path: "/repos/alpha",
-      relativePath: ".data/repos/alpha",
-    });
     mockedListWorkflowRuns.mockReturnValue({
       repositoryName: "alpha",
       workflowRuns: [],
@@ -39,25 +28,31 @@ describe("GET /api/workflows/runs", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockedGetRepositoryByName).toHaveBeenCalledWith("alpha");
     expect(mockedListWorkflowRuns).toHaveBeenCalledWith({
-      repositoryPath: "/repos/alpha",
+      repositoryName: "alpha",
     });
-    await expect(response.json()).resolves.toEqual({
+    const payload = await response.json();
+
+    expect(payload).toEqual({
       repositoryName: "alpha",
       workflowRuns: [],
     });
+    expect(payload).not.toHaveProperty("repositoryPath");
   });
 
   it("returns not found when the repository name does not resolve on the server", async () => {
-    mockedGetRepositoryByName.mockReturnValue(null);
+    mockedListWorkflowRuns.mockImplementation(() => {
+      throw new WorkflowRunRequestError(
+        "ugit repository missing-repo does not exist on the server.",
+        404,
+      );
+    });
 
     const response = await GET(
       new Request("http://localhost/api/workflows/runs?repositoryName=missing-repo"),
     );
 
     expect(response.status).toBe(404);
-    expect(mockedListWorkflowRuns).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual({
       error: "ugit repository missing-repo does not exist on the server.",
     });

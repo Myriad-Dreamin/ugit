@@ -9,6 +9,7 @@ import {
   readWorkflowRunLogSnapshot,
 } from "@/lib/workflow-runs/log-storage";
 import {
+  resolveWorkflowReadRepository,
   WorkflowRunRequestError,
   validateWorkflowLogsRequest,
   validateWorkflowRunDetailRequest,
@@ -88,13 +89,14 @@ export function listWorkflowRuns(
   payload: unknown,
   options: WorkflowRunServiceOptions = {},
 ): ListWorkflowRunsResponse {
-  const request = validateWorkflowRunListRequest(payload, {
+  const request = validateWorkflowRunListRequest(payload);
+  const repository = resolveWorkflowReadRepository(request.repositoryName, {
     cwd: options.cwd,
   });
 
   return {
-    repositoryName: request.repositoryName,
-    workflowRuns: listStoredWorkflowRuns(request.repositoryPath, {
+    repositoryName: repository.repositoryName,
+    workflowRuns: listStoredWorkflowRuns(repository.repositoryPath, {
       storage: options.storage,
     }).map(toWorkflowRunSummary),
   };
@@ -129,14 +131,13 @@ export function streamWorkflowRunLogs(
   payload: unknown,
   options: WorkflowRunServiceOptions = {},
 ): ReadableStream<Uint8Array> {
-  const request = validateWorkflowLogsRequest(payload, {
-    cwd: options.cwd,
-  });
-  const workflowRun = readWorkflowRunByContext(
-    request.workflowId,
-    request.repositoryPath,
-    options.storage,
-  );
+  const request = validateWorkflowLogsRequest(payload);
+  const repositoryPath = request.repositoryName
+    ? resolveWorkflowReadRepository(request.repositoryName, {
+        cwd: options.cwd,
+      }).repositoryPath
+    : null;
+  const workflowRun = readWorkflowRunByContext(request.workflowId, repositoryPath, options.storage);
 
   if (!workflowRun) {
     throw new WorkflowRunRequestError(buildWorkflowRunNotFoundMessage(request), 404);
@@ -157,7 +158,7 @@ export function streamWorkflowRunLogs(
           while (!cancelled) {
             const currentRun = readWorkflowRunByContext(
               request.workflowId,
-              request.repositoryPath,
+              repositoryPath,
               options.storage,
             );
 
@@ -204,11 +205,12 @@ function readRepositoryWorkflowRun(
   repositoryName: string;
   workflowRun: WorkflowRunRecord;
 }> {
-  const request = validateWorkflowRunDetailRequest(payload, {
+  const request = validateWorkflowRunDetailRequest(payload);
+  const repository = resolveWorkflowReadRepository(request.repositoryName, {
     cwd: options.cwd,
   });
   const workflowRun = readWorkflowRunForRepository(
-    request.repositoryPath,
+    repository.repositoryPath,
     request.workflowId,
     options.storage,
   );
@@ -218,7 +220,7 @@ function readRepositoryWorkflowRun(
   }
 
   return {
-    repositoryName: request.repositoryName,
+    repositoryName: repository.repositoryName,
     workflowRun,
   };
 }

@@ -7,6 +7,7 @@ import {
   WorkflowRunRequestError,
   validateWorkflowLogsRequest,
   validateWorkflowRunDetailRequest,
+  validateWorkflowRunListRequest,
   validateWorkflowRunRequest,
 } from "@/lib/workflow-runs/validation";
 
@@ -46,24 +47,27 @@ describe("validateWorkflowRunRequest", () => {
 });
 
 describe("validateWorkflowRunDetailRequest", () => {
-  it("normalizes repo-scoped detail reads", () => {
-    const workspace = createWorkspace();
-    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
-
+  it("accepts repo-scoped detail reads without exposing repository paths", () => {
     expect(
-      validateWorkflowRunDetailRequest(
-        {
-          repositoryPath,
-          workflowId: "workflow-1",
-        },
-        {
-          cwd: workspace,
-        },
-      ),
+      validateWorkflowRunDetailRequest({
+        repositoryName: "alpha",
+        workflowId: "workflow-1",
+      }),
     ).toEqual({
       repositoryName: "alpha",
-      repositoryPath,
       workflowId: "workflow-1",
+    });
+  });
+});
+
+describe("validateWorkflowRunListRequest", () => {
+  it("accepts repo-scoped list reads without repository paths", () => {
+    expect(
+      validateWorkflowRunListRequest({
+        repositoryName: "alpha",
+      }),
+    ).toEqual({
+      repositoryName: "alpha",
     });
   });
 });
@@ -96,25 +100,28 @@ describe("resolveWorkflowReadRepository", () => {
 
 describe("validateWorkflowLogsRequest", () => {
   it("accepts repo-scoped log streams with offsets", () => {
-    const workspace = createWorkspace();
-    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
-
     expect(
-      validateWorkflowLogsRequest(
-        {
-          workflowId: "workflow-1",
-          repositoryPath,
-          offset: "42",
-        },
-        {
-          cwd: workspace,
-        },
-      ),
+      validateWorkflowLogsRequest({
+        workflowId: "workflow-1",
+        repositoryName: "alpha",
+        offset: "42",
+      }),
     ).toEqual({
       workflowId: "workflow-1",
       repositoryName: "alpha",
-      repositoryPath,
       offset: 42,
+    });
+  });
+
+  it("preserves workflow-id-only log reads for non-browser callers", () => {
+    expect(
+      validateWorkflowLogsRequest({
+        workflowId: "workflow-1",
+      }),
+    ).toEqual({
+      workflowId: "workflow-1",
+      repositoryName: null,
+      offset: 0,
     });
   });
 

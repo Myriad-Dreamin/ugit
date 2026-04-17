@@ -28,20 +28,22 @@ export type ValidatedWorkflowRunRequest = Readonly<{
 
 export type ValidatedWorkflowRunListRequest = Readonly<{
   repositoryName: string;
-  repositoryPath: string;
 }>;
 
 export type ValidatedWorkflowRunDetailRequest = Readonly<{
   repositoryName: string;
-  repositoryPath: string;
   workflowId: string;
 }>;
 
 export type ValidatedWorkflowLogsRequest = Readonly<{
   workflowId: string;
   repositoryName: string | null;
-  repositoryPath: string | null;
   offset: number;
+}>;
+
+export type ValidatedWorkflowReadRepository = Readonly<{
+  repositoryName: string;
+  repositoryPath: string;
 }>;
 
 export type ValidateWorkflowRequestOptions = Readonly<{
@@ -53,7 +55,7 @@ export type ValidateWorkflowRunRequestOptions = ValidateWorkflowRequestOptions;
 export function resolveWorkflowReadRepository(
   repositoryNameValue: unknown,
   options: ValidateWorkflowRequestOptions = {},
-): ValidatedWorkflowRunListRequest {
+): ValidatedWorkflowReadRepository {
   const repositoryName = readRequiredString(repositoryNameValue, "repositoryName");
   const repository = options.cwd
     ? getRepositoryByName(repositoryName, {
@@ -101,46 +103,32 @@ export function validateWorkflowRunRequest(
   };
 }
 
-export function validateWorkflowRunListRequest(
-  payload: unknown,
-  options: ValidateWorkflowRequestOptions = {},
-): ValidatedWorkflowRunListRequest {
+export function validateWorkflowRunListRequest(payload: unknown): ValidatedWorkflowRunListRequest {
   const request = asRecord(payload, "The workflow-run list payload");
 
-  return normalizeRepositoryTarget(
-    readRequiredString(request.repositoryPath, "repositoryPath"),
-    options.cwd,
-  );
+  return {
+    repositoryName: readRequiredString(request.repositoryName, "repositoryName"),
+  };
 }
 
 export function validateWorkflowRunDetailRequest(
   payload: unknown,
-  options: ValidateWorkflowRequestOptions = {},
 ): ValidatedWorkflowRunDetailRequest {
   const request = asRecord(payload, "The workflow-run detail payload");
-  const repository = normalizeRepositoryTarget(
-    readRequiredString(request.repositoryPath, "repositoryPath"),
-    options.cwd,
-  );
 
   return {
-    ...repository,
+    repositoryName: readRequiredString(request.repositoryName, "repositoryName"),
     workflowId: readRequiredString(request.workflowId, "workflowId"),
   };
 }
 
-export function validateWorkflowLogsRequest(
-  payload: unknown,
-  options: ValidateWorkflowRequestOptions = {},
-): ValidatedWorkflowLogsRequest {
+export function validateWorkflowLogsRequest(payload: unknown): ValidatedWorkflowLogsRequest {
   const request = asRecord(payload, "The workflow-log payload");
-  const repositoryPath = readOptionalString(request.repositoryPath, "repositoryPath");
-  const repository = repositoryPath ? normalizeRepositoryTarget(repositoryPath, options.cwd) : null;
+  const repositoryName = readOptionalNonEmptyString(request.repositoryName, "repositoryName");
 
   return {
     workflowId: readRequiredString(request.workflowId, "workflowId"),
-    repositoryName: repository?.repositoryName ?? null,
-    repositoryPath: repository?.repositoryPath ?? null,
+    repositoryName: repositoryName ?? null,
     offset: readNonNegativeInteger(request.offset, "offset"),
   };
 }
@@ -229,6 +217,14 @@ function readOptionalString(value: unknown, label: string): string | undefined {
   }
 
   return readString(value, label);
+}
+
+function readOptionalNonEmptyString(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  return readRequiredString(value, label);
 }
 
 function readNonNegativeInteger(value: unknown, label: string): number {
