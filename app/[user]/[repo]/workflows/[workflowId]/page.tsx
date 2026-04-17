@@ -85,7 +85,6 @@ export default async function WorkflowRunPage({ params }: WorkflowRunPageProps) 
           initialLogOffset={response.initialLog.nextOffset}
           initialLogText={response.initialLog.text}
           initialWorkflowRun={response.workflowRun}
-          repositoryPath={repository.path}
         />
       </section>
     </main>

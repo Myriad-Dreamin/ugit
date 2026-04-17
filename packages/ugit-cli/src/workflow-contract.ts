@@ -18,7 +18,6 @@ export type QueueWorkflowRunResponse = {
 export type WorkflowRunSummary = {
   id: string;
   repositoryName: string;
-  repositoryPath: string;
   branchName: string;
   commitHash: string;
   workflowName: string;

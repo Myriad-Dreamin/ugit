@@ -87,17 +87,17 @@ describe("repo-scoped workflow services", () => {
       nudgeRunner: mockedNudgeRunner,
     });
 
-    expect(
-      listWorkflowRuns(
-        {
-          repositoryPath,
-        },
-        {
-          cwd: workspace,
-          storage,
-        },
-      ),
-    ).toEqual({
+    const response = listWorkflowRuns(
+      {
+        repositoryPath,
+      },
+      {
+        cwd: workspace,
+        storage,
+      },
+    );
+
+    expect(response).toEqual({
       repositoryName: "alpha",
       workflowRuns: [
         expect.objectContaining({
@@ -107,6 +107,7 @@ describe("repo-scoped workflow services", () => {
         }),
       ],
     });
+    expect(response.workflowRuns[0]).not.toHaveProperty("repositoryPath");
   });
 
   it("rejects repo-scoped detail reads for workflow ids owned by another repository", () => {

@@ -2,7 +2,7 @@ import "server-only";
 
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { getRepositoriesRoot } from "@/lib/repositories";
+import { getRepositoriesRoot, getRepositoryByName } from "@/lib/repositories";
 import type { GitPlatformPublishedBranch } from "@/packages/ugit-cli/src/pull-request-contract";
 
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,64}$/i;
@@ -49,6 +49,30 @@ export type ValidateWorkflowRequestOptions = Readonly<{
 }>;
 
 export type ValidateWorkflowRunRequestOptions = ValidateWorkflowRequestOptions;
+
+export function resolveWorkflowReadRepository(
+  repositoryNameValue: unknown,
+  options: ValidateWorkflowRequestOptions = {},
+): ValidatedWorkflowRunListRequest {
+  const repositoryName = readRequiredString(repositoryNameValue, "repositoryName");
+  const repository = options.cwd
+    ? getRepositoryByName(repositoryName, {
+        cwd: options.cwd,
+      })
+    : getRepositoryByName(repositoryName);
+
+  if (!repository) {
+    throw new WorkflowRunRequestError(
+      `ugit repository ${repositoryName} does not exist on the server.`,
+      404,
+    );
+  }
+
+  return {
+    repositoryName: repository.name,
+    repositoryPath: repository.path,
+  };
+}
 
 export function validateWorkflowRunRequest(
   payload: unknown,

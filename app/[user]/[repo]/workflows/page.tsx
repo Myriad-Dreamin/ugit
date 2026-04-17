@@ -65,7 +65,6 @@ export default async function RepositoryWorkflowsPage({ params }: RepositoryWork
         <WorkflowRunsListClient
           initialWorkflowRuns={response.workflowRuns}
           repositoryName={repository.name}
-          repositoryPath={repository.path}
         />
       </section>
     </main>

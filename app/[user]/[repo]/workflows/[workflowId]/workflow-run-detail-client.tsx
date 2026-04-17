@@ -24,14 +24,12 @@ type WorkflowRunDetailClientProps = Readonly<{
   initialLogOffset: number;
   initialLogText: string;
   initialWorkflowRun: WorkflowRunSummary;
-  repositoryPath: string;
 }>;
 
 export function WorkflowRunDetailClient({
   initialLogOffset,
   initialLogText,
   initialWorkflowRun,
-  repositoryPath,
 }: WorkflowRunDetailClientProps) {
   const [workflowRun, setWorkflowRun] = useState(initialWorkflowRun);
   const [logText, setLogText] = useState(initialLogText);
@@ -40,7 +38,7 @@ export function WorkflowRunDetailClient({
 
   const refreshWorkflowRun = useEffectEvent(async () => {
     const searchParams = new URLSearchParams({
-      repositoryPath,
+      repositoryName: workflowRun.repositoryName,
     });
     const response = await fetch(
       `/api/workflows/runs/${encodeURIComponent(workflowRun.id)}?${searchParams.toString()}`,
@@ -104,7 +102,7 @@ export function WorkflowRunDetailClient({
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [repositoryPath, workflowRun.id, workflowRun.status]);
+  }, [workflowRun.id, workflowRun.repositoryName, workflowRun.status]);
 
   useEffect(() => {
     if (!isWorkflowRunActive(workflowRun.status)) {
@@ -117,7 +115,7 @@ export function WorkflowRunDetailClient({
     const streamLogs = async () => {
       const searchParams = new URLSearchParams({
         workflowId: workflowRun.id,
-        repositoryPath,
+        repositoryName: workflowRun.repositoryName,
         offset: String(logOffsetRef.current),
       });
       const response = await fetch(`/api/workflows/logs?${searchParams.toString()}`, {
@@ -163,7 +161,7 @@ export function WorkflowRunDetailClient({
       cancelled = true;
       abortController.abort();
     };
-  }, [repositoryPath, workflowRun.id, workflowRun.status]);
+  }, [workflowRun.id, workflowRun.repositoryName, workflowRun.status]);
 
   return (
     <>

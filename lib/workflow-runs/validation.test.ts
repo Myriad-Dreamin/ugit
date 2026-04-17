@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  resolveWorkflowReadRepository,
   WorkflowRunRequestError,
   validateWorkflowLogsRequest,
   validateWorkflowRunDetailRequest,
@@ -64,6 +65,32 @@ describe("validateWorkflowRunDetailRequest", () => {
       repositoryPath,
       workflowId: "workflow-1",
     });
+  });
+});
+
+describe("resolveWorkflowReadRepository", () => {
+  it("resolves a repository name into a server-side repository path", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+
+    expect(
+      resolveWorkflowReadRepository("alpha", {
+        cwd: workspace,
+      }),
+    ).toEqual({
+      repositoryName: "alpha",
+      repositoryPath,
+    });
+  });
+
+  it("rejects missing repositories by name", () => {
+    const workspace = createWorkspace();
+
+    expect(() =>
+      resolveWorkflowReadRepository("missing-repo", {
+        cwd: workspace,
+      }),
+    ).toThrowError(WorkflowRunRequestError);
   });
 });
 
