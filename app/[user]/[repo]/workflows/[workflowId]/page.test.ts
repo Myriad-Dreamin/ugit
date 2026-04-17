@@ -108,7 +108,7 @@ describe("WorkflowRunPage", () => {
     ).rejects.toThrowError(NEXT_NOT_FOUND_ERROR);
 
     expect(mockedGetWorkflowRunPageData).toHaveBeenCalledWith({
-      repositoryPath: "/tmp/example-repo",
+      repositoryName: "example-repo",
       workflowId: "workflow-1",
     });
     expect(mockedNotFound).toHaveBeenCalledTimes(1);

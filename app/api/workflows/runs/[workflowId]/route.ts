@@ -1,8 +1,5 @@
 import { getWorkflowRun } from "@/lib/workflow-runs/service";
-import {
-  resolveWorkflowReadRepository,
-  WorkflowRunRequestError,
-} from "@/lib/workflow-runs/validation";
+import { WorkflowRunRequestError } from "@/lib/workflow-runs/validation";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +17,8 @@ export async function GET(request: Request, context: WorkflowRunRouteContext): P
   try {
     const url = new URL(request.url);
     const { workflowId } = await Promise.resolve(context.params);
-    const repository = resolveWorkflowReadRepository(url.searchParams.get("repositoryName"));
     const response = getWorkflowRun({
-      repositoryPath: repository.repositoryPath,
+      repositoryName: url.searchParams.get("repositoryName"),
       workflowId,
     });
 

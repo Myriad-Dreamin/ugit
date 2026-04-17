@@ -42,7 +42,7 @@ export default async function WorkflowRunPage({ params }: WorkflowRunPageProps) 
 
   try {
     response = getWorkflowRunPageData({
-      repositoryPath: repository.path,
+      repositoryName: repository.name,
       workflowId,
     });
   } catch (error) {

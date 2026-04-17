@@ -128,7 +128,7 @@ describe("RepositoryWorkflowsPage", () => {
       type: "main",
     });
     expect(mockedListWorkflowRuns).toHaveBeenCalledWith({
-      repositoryPath: "/tmp/example-repo",
+      repositoryName: "example-repo",
     });
     expect(workflowRunsClient?.props).toMatchObject({
       initialWorkflowRuns: [],

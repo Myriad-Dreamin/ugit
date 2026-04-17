@@ -37,7 +37,7 @@ export default async function RepositoryWorkflowsPage({ params }: RepositoryWork
   const repositoryHref = getRepositoryHref(repository.name);
   const repositoryWorkflowsHref = getRepositoryWorkflowsHref(repository.name);
   const response = listWorkflowRuns({
-    repositoryPath: repository.path,
+    repositoryName: repository.name,
   });
 
   return (

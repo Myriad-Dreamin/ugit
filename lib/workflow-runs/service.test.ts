@@ -89,7 +89,7 @@ describe("repo-scoped workflow services", () => {
 
     const response = listWorkflowRuns(
       {
-        repositoryPath,
+        repositoryName: "alpha",
       },
       {
         cwd: workspace,
@@ -113,7 +113,7 @@ describe("repo-scoped workflow services", () => {
   it("rejects repo-scoped detail reads for workflow ids owned by another repository", () => {
     const workspace = createWorkspace();
     const repositoryA = createRepositorySkeleton(workspace, "alpha");
-    const repositoryB = createRepositorySkeleton(workspace, "beta");
+    createRepositorySkeleton(workspace, "beta");
     const storage = path.join(workspace, "storage", "pull-requests");
 
     queueWorkflowRun(createPayload(repositoryA), {
@@ -127,7 +127,7 @@ describe("repo-scoped workflow services", () => {
     expect(() =>
       getWorkflowRun(
         {
-          repositoryPath: repositoryB,
+          repositoryName: "beta",
           workflowId: "workflow-1",
         },
         {
@@ -174,7 +174,48 @@ describe("streamWorkflowRunLogs service", () => {
         streamWorkflowRunLogs(
           {
             workflowId: queued.workflowId,
-            repositoryPath,
+            repositoryName: "alpha",
+          },
+          createServiceOptions(workspace, storage),
+        ),
+      ),
+    ).resolves.toContain("running\n");
+  });
+
+  it("still streams logs by workflow id when no repository name is provided", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    const queued = queueWorkflowRun(createPayload(repositoryPath), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+      nudgeRunner: mockedNudgeRunner,
+    });
+
+    void delay(10).then(() => {
+      const workflowRun = readWorkflowRun(queued.workflowId, storage);
+
+      if (!workflowRun) {
+        throw new Error("Expected workflow-1 to exist before streaming logs.");
+      }
+
+      appendWorkflowRunLog(workflowRun.logPath, "running\n");
+      completeWorkflowRun({
+        workflowId: queued.workflowId,
+        status: "succeeded",
+        now: createNowFactory("2026-04-14T00:00:10.000Z"),
+        storage,
+      });
+    });
+
+    await expect(
+      readStream(
+        streamWorkflowRunLogs(
+          {
+            workflowId: queued.workflowId,
           },
           createServiceOptions(workspace, storage),
         ),
