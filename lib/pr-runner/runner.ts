@@ -1,8 +1,5 @@
 import "server-only";
 
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { StorageOptions } from "@/lib/storage/sqlite";
 import { appendWorkflowRunLog } from "@/lib/workflow-runs/log-storage";
 import { attemptFastForwardMerge } from "./merge";
@@ -19,6 +16,11 @@ import {
   type ClaimedCiJob,
   type ClaimedWorkflowRun,
 } from "./storage";
+import {
+  cleanupEphemeralCiWorktree,
+  createEphemeralCiWorktree,
+  prepareManagedWorkflowWorktree,
+} from "./worktrees";
 import { executeWorkflowPackages } from "./workflows";
 
 type RunnerOptions = Readonly<{
@@ -71,7 +73,7 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
   let resultArtifact: CiResultArtifact | null = null;
 
   try {
-    worktreePath = await createDetachedWorktree(job, runCommand);
+    worktreePath = await createEphemeralCiWorktree(job, runCommand);
 
     const workflowSummary = await executeWorkflowPackages(worktreePath, runCommand);
 
@@ -182,7 +184,7 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
     });
   } finally {
     if (worktreePath) {
-      await cleanupDetachedWorktree(job.repositoryPath, worktreePath, runCommand);
+      await cleanupEphemeralCiWorktree(job.repositoryPath, worktreePath, runCommand);
     }
   }
 }
@@ -193,22 +195,13 @@ export async function executeWorkflowRunJob(
 ): Promise<void> {
   const now = options.now ?? (() => new Date());
   const runCommand = options.runCommand ?? runAsyncCommand;
-  const executionRepositoryPath = workflowRun.executionRepositoryPath;
-  let worktreePath: string | null = null;
-
   try {
     appendWorkflowRunLog(
       workflowRun.logPath,
       `Starting workflow ${workflowRun.workflowName} on ${workflowRun.branchName}@${workflowRun.commitHash}.\n`,
     );
 
-    worktreePath = await createDetachedWorktree(
-      {
-        ...workflowRun,
-        repositoryPath: executionRepositoryPath,
-      },
-      runCommand,
-    );
+    const worktreePath = await prepareManagedWorkflowWorktree(workflowRun, runCommand);
 
     const workflowSummary = await executeWorkflowPackages(worktreePath, runCommand, {
       workflowName: workflowRun.workflowName,
@@ -244,10 +237,6 @@ export async function executeWorkflowRunJob(
       now,
       storage: options.storage,
     });
-  } finally {
-    if (worktreePath) {
-      await cleanupDetachedWorktree(executionRepositoryPath, worktreePath, runCommand);
-    }
   }
 }
 
@@ -306,48 +295,6 @@ async function drainRunner(options: RunnerOptions): Promise<void> {
 
     return;
   }
-}
-
-async function createDetachedWorktree(
-  job: Pick<ClaimedCiJob, "commitHash" | "repositoryName" | "repositoryPath">,
-  runCommand: AsyncCommandRunner,
-): Promise<string> {
-  const worktreePath = await mkdtemp(path.join(os.tmpdir(), `ugit-ci-${job.repositoryName}-`));
-  const addWorktreeResult = await runCommand("git", [
-    "-C",
-    job.repositoryPath,
-    "worktree",
-    "add",
-    "--detach",
-    worktreePath,
-    job.commitHash,
-  ]);
-
-  if (addWorktreeResult.exitCode !== 0) {
-    await rm(worktreePath, {
-      force: true,
-      recursive: true,
-    });
-    throw new Error(
-      addWorktreeResult.stderr ||
-        addWorktreeResult.stdout ||
-        "Failed to create an isolated CI worktree.",
-    );
-  }
-
-  return worktreePath;
-}
-
-async function cleanupDetachedWorktree(
-  repositoryPath: string,
-  worktreePath: string,
-  runCommand: AsyncCommandRunner,
-): Promise<void> {
-  await runCommand("git", ["-C", repositoryPath, "worktree", "remove", "--force", worktreePath]);
-  await rm(worktreePath, {
-    force: true,
-    recursive: true,
-  });
 }
 
 async function executeClaimedJob(
