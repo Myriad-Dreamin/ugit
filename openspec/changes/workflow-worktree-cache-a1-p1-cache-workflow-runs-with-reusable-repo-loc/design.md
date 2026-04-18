@@ -96,7 +96,9 @@ log-streaming, and CLI or API contracts unchanged.
   Rationale: the user request is about runner execution caching, not CLI or API
   changes. README should explain that CI remains ephemeral while manual workflow
   runs use the managed repo-local worktree so operators understand the new cache
-  behavior.
+  behavior. PR CI must also evict that managed slot before a fast-forward merge
+  starts tracking `workflow1`, otherwise the mirrored repository is left dirty
+  by the nested linked worktree.
   Alternative considered: keep docs generic and rely on code comments.
   Rejected because the execution model is observable operational behavior and
   should stay documented.
@@ -122,6 +124,10 @@ log-streaming, and CLI or API contracts unchanged.
 - [Shared helper refactors could regress PR CI teardown] -> Keep CI on its
   existing ephemeral lifecycle and add tests that still expect detached worktree
   removal for CI jobs.
+- [Merged commits can claim the reserved workflow slot] -> Detect when the
+  target fast-forward commit starts tracking `workflow1` and evict only the
+  Git-owned managed worktree before mutating the mirrored repository, while
+  still refusing to delete ordinary repository content at that path.
 - [Repair logic may be more complex than first-run creation] -> Keep the helper
   phases explicit: ensure path, validate ownership, recover if broken, then
   detach or reset to the queued commit.

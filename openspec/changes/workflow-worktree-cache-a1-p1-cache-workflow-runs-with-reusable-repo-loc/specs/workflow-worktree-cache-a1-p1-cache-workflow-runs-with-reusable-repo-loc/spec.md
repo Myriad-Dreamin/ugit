@@ -77,6 +77,16 @@ managed manual workflow worktree.
 - **AND** the runner SHALL remove that temporary worktree after the CI job
   finishes
 
+#### Scenario: Fast-forward merges evict the reserved workflow slot when needed
+- **WHEN** a successful pull-request CI merge would fast-forward the mirrored
+  repository to a commit that tracks the top-level `workflow1` path
+- **AND** `.data/repos/<repo>/workflow1` currently exists as the managed linked
+  worktree
+- **THEN** the runner SHALL remove that managed linked worktree before mutating
+  the mirrored repository
+- **AND** the mirrored repository SHALL remain clean after the fast-forward
+  merge completes
+
 ### Requirement: Managed workflow worktrees persist across normal completion
 The system SHALL keep `.data/repos/<repo>/workflow1` after a normal manual
 workflow run finishes, and SHALL remove or recreate it only during explicit

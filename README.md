@@ -259,4 +259,5 @@ Execution model:
 - final result artifacts are written to `.data/ci-results/<repo>/<branch>.json`
 - manual workflow logs are appended to `.data/workflow-run-logs/<repo>/<workflowId>.log`
 - green pull requests attempt a fast-forward-only merge into the requested base branch
+- if a fast-forward merge starts tracking `workflow1`, ugit removes the managed linked worktree first so the mirrored repository stays clean and the path can become ordinary repository content
 - merge failures are persisted as CI failures without creating merge commits

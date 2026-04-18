@@ -83,7 +83,7 @@ export async function prepareManagedWorkflowWorktree(
     throw new Error(initialResult.errorMessage);
   }
 
-  await recoverManagedWorkflowWorktree(job.repositoryPath, worktreePath, runCommand);
+  await removeManagedWorkflowWorktree(job.repositoryPath, worktreePath, runCommand);
 
   const recoveryResult = await tryPrepareManagedWorkflowWorktree(job, worktreePath, runCommand);
 
@@ -92,6 +92,34 @@ export async function prepareManagedWorkflowWorktree(
   }
 
   throw new Error(recoveryResult.errorMessage);
+}
+
+export async function evictManagedWorkflowWorktreeForCommit(
+  repositoryPath: string,
+  commitHash: string,
+  runCommand: AsyncCommandRunner,
+): Promise<void> {
+  if (!(await commitUsesManagedWorkflowWorktreePath(repositoryPath, commitHash, runCommand))) {
+    return;
+  }
+
+  const worktreePath = getManagedWorkflowWorktreePath(repositoryPath);
+
+  if (!existsSync(worktreePath)) {
+    return;
+  }
+
+  const worktreeState = await inspectManagedWorkflowWorktree(
+    repositoryPath,
+    worktreePath,
+    runCommand,
+  );
+
+  if (worktreeState.kind === "blocked") {
+    return;
+  }
+
+  await removeManagedWorkflowWorktree(repositoryPath, worktreePath, runCommand);
 }
 
 async function tryPrepareManagedWorkflowWorktree(
@@ -262,7 +290,7 @@ async function inspectManagedWorkflowWorktree(
   };
 }
 
-async function recoverManagedWorkflowWorktree(
+async function removeManagedWorkflowWorktree(
   repositoryPath: string,
   worktreePath: string,
   runCommand: AsyncCommandRunner,
@@ -281,6 +309,22 @@ async function recoverManagedWorkflowWorktree(
         `Failed to prune broken worktree metadata for ${worktreePath}.`,
     );
   }
+}
+
+async function commitUsesManagedWorkflowWorktreePath(
+  repositoryPath: string,
+  commitHash: string,
+  runCommand: AsyncCommandRunner,
+): Promise<boolean> {
+  const pathLookupResult = await runCommand("git", [
+    "-C",
+    repositoryPath,
+    "cat-file",
+    "-e",
+    `${commitHash}:${MANAGED_WORKFLOW_WORKTREE_NAME}`,
+  ]);
+
+  return pathLookupResult.exitCode === 0;
 }
 
 function resolveGitPath(basePath: string, value: string): string {
