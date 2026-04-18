@@ -123,6 +123,126 @@ describe("attemptFastForwardMerge", () => {
     expect(existsSync(path.join(repositoryPath, "workflow1", ".git"))).toBe(false);
     expect(listWorktreeRemovals(runCommand)).toContain(worktreePath);
   });
+
+  it("evicts stale workflow1 residue when git still owns the managed slot", async () => {
+    const originPath = createGitRepository();
+    const baseCommit = commitFile(originPath, "README.md", "# base\n", "base");
+    const repositoryPath = cloneGitRepository(originPath);
+    const worktreePath = path.join(repositoryPath, "workflow1");
+
+    execFileSync(
+      "git",
+      ["-C", repositoryPath, "worktree", "add", "--detach", worktreePath, baseCommit],
+      {
+        stdio: "ignore",
+      },
+    );
+    rmSync(path.join(worktreePath, ".git"), { force: true });
+    writeFileSync(path.join(worktreePath, "README.md"), "stale\n", "utf8");
+
+    execFileSync("git", ["-C", originPath, "checkout", "-q", "-b", "feature/stale-slot"], {
+      stdio: "ignore",
+    });
+    const featureCommit = commitFile(
+      originPath,
+      "workflow1/project-file.txt",
+      "tracked\n",
+      "add workflow1 path",
+    );
+
+    execFileSync(
+      "git",
+      ["-C", repositoryPath, "fetch", "--quiet", "origin", "feature/stale-slot"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    const runCommand = vi.fn(runAsyncCommand);
+
+    await expect(
+      attemptFastForwardMerge({
+        repositoryPath,
+        baseBranch: "main",
+        commitHash: featureCommit,
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "succeeded",
+      message: `Fast-forwarded main to ${featureCommit}.`,
+    });
+
+    expect(readHeadCommit(repositoryPath, "main")).toBe(featureCommit);
+    expect(readGitOutput(repositoryPath, "status", "--short")).toBe("");
+    expect(existsSync(path.join(worktreePath, "README.md"))).toBe(false);
+    expect(readFileSync(path.join(worktreePath, "project-file.txt"), "utf8")).toBe("tracked\n");
+    expect(listWorktreeRemovals(runCommand)).toContain(worktreePath);
+  });
+
+  it("fails before fast-forwarding when unregistered workflow1 residue would dirty the repo", async () => {
+    const originPath = createGitRepository();
+    const baseCommit = commitFile(originPath, "README.md", "# base\n", "base");
+    const repositoryPath = cloneGitRepository(originPath);
+    const worktreePath = path.join(repositoryPath, "workflow1");
+
+    execFileSync(
+      "git",
+      ["-C", repositoryPath, "worktree", "add", "--detach", worktreePath, baseCommit],
+      {
+        stdio: "ignore",
+      },
+    );
+    rmSync(path.join(worktreePath, ".git"), { force: true });
+    writeFileSync(path.join(worktreePath, "README.md"), "stale\n", "utf8");
+    execFileSync("git", ["-C", repositoryPath, "worktree", "prune"], {
+      stdio: "ignore",
+    });
+
+    execFileSync("git", ["-C", originPath, "checkout", "-q", "-b", "feature/blocked-slot"], {
+      stdio: "ignore",
+    });
+    const featureCommit = commitFile(
+      originPath,
+      "workflow1/project-file.txt",
+      "tracked\n",
+      "add workflow1 path",
+    );
+
+    execFileSync(
+      "git",
+      ["-C", repositoryPath, "fetch", "--quiet", "origin", "feature/blocked-slot"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    const runCommand = vi.fn(runAsyncCommand);
+
+    await expect(
+      attemptFastForwardMerge({
+        repositoryPath,
+        baseBranch: "main",
+        commitHash: featureCommit,
+        runCommand,
+      }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("Refusing to remove"),
+    });
+
+    expect(readHeadCommit(repositoryPath, "main")).toBe(baseCommit);
+    expect(
+      readGitOutput(
+        repositoryPath,
+        "status",
+        "--short",
+        "--untracked-files=all",
+        "--",
+        "workflow1",
+      ),
+    ).toBe("?? workflow1/README.md");
+    expect(listWorktreeRemovals(runCommand)).not.toContain(worktreePath);
+  });
 });
 
 function createGitRepository(): string {

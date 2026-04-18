@@ -116,10 +116,61 @@ export async function evictManagedWorkflowWorktreeForCommit(
   );
 
   if (worktreeState.kind === "blocked") {
-    return;
+    if (await hasCleanRepositoryStateAtManagedWorkflowPath(repositoryPath, runCommand)) {
+      return;
+    }
+
+    throw new Error(worktreeState.errorMessage);
   }
 
   await removeManagedWorkflowWorktree(repositoryPath, worktreePath, runCommand);
+}
+
+async function hasCleanRepositoryStateAtManagedWorkflowPath(
+  repositoryPath: string,
+  runCommand: AsyncCommandRunner,
+): Promise<boolean> {
+  const statusResult = await runCommand("git", [
+    "-C",
+    repositoryPath,
+    "status",
+    "--porcelain",
+    "--ignored=matching",
+    "--untracked-files=all",
+    "--",
+    MANAGED_WORKFLOW_WORKTREE_NAME,
+  ]);
+
+  return statusResult.exitCode === 0 && statusResult.stdout.trim() === "";
+}
+
+async function isManagedWorkflowWorktreeRegistered(
+  repositoryPath: string,
+  worktreePath: string,
+  runCommand: AsyncCommandRunner,
+): Promise<boolean> {
+  const worktreeListResult = await runCommand("git", [
+    "-C",
+    repositoryPath,
+    "worktree",
+    "list",
+    "--porcelain",
+  ]);
+
+  if (worktreeListResult.exitCode !== 0) {
+    return false;
+  }
+
+  const resolvedWorktreePath = path.resolve(worktreePath);
+
+  return worktreeListResult.stdout
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("worktree "))
+    .some(
+      (line) =>
+        path.resolve(repositoryPath, line.slice("worktree ".length).trim()) ===
+        resolvedWorktreePath,
+    );
 }
 
 async function tryPrepareManagedWorkflowWorktree(
@@ -234,7 +285,10 @@ async function inspectManagedWorkflowWorktree(
   ]);
 
   if (topLevelResult.exitCode !== 0) {
-    if (existsSync(path.join(worktreePath, ".git"))) {
+    if (
+      existsSync(path.join(worktreePath, ".git")) ||
+      (await isManagedWorkflowWorktreeRegistered(repositoryPath, worktreePath, runCommand))
+    ) {
       return {
         kind: "recoverable",
         errorMessage: `Managed workflow worktree ${worktreePath} has stale or missing linked-worktree metadata.`,
@@ -276,6 +330,13 @@ async function inspectManagedWorkflowWorktree(
   }
 
   if (resolvedCommonDir === path.resolve(repositoryPath, ".git")) {
+    if (await isManagedWorkflowWorktreeRegistered(repositoryPath, worktreePath, runCommand)) {
+      return {
+        kind: "recoverable",
+        errorMessage: `Managed workflow worktree ${worktreePath} has stale or missing linked-worktree metadata.`,
+      };
+    }
+
     return {
       kind: "blocked",
       errorMessage:

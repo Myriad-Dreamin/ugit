@@ -263,6 +263,54 @@ describe("executeWorkflowRunJob", () => {
       path.join(repositoryPath, ".git"),
     );
   });
+
+  it("recovers the managed worktree when the linked .git file disappears", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createGitRepository(workspace, "alpha");
+    const commitHash = readGitOutput(repositoryPath, "rev-parse", "HEAD");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const runCommand = vi.fn(runAsyncCommand);
+
+    const firstExecution = queueAndClaimWorkflowRun({
+      cwd: workspace,
+      commitHash,
+      repositoryPath,
+      storage,
+      timestamp: "2026-04-14T00:00:00.000Z",
+      workflowId: "workflow-1",
+    });
+    const worktreePath = path.join(repositoryPath, "workflow1");
+
+    await executeWorkflowRunJob(firstExecution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      runCommand,
+    });
+
+    rmSync(path.join(worktreePath, ".git"), { force: true });
+    writeFileSync(path.join(worktreePath, "stale-cache.txt"), "stale\n", "utf8");
+
+    const secondExecution = queueAndClaimWorkflowRun({
+      cwd: workspace,
+      commitHash,
+      repositoryPath,
+      storage,
+      timestamp: "2026-04-14T00:01:00.000Z",
+      workflowId: "workflow-2",
+    });
+
+    await executeWorkflowRunJob(secondExecution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:01:20.000Z"),
+      runCommand,
+    });
+
+    expect(existsSync(worktreePath)).toBe(true);
+    expect(existsSync(path.join(worktreePath, "stale-cache.txt"))).toBe(false);
+    expect(readGitOutput(worktreePath, "rev-parse", "--git-common-dir")).toBe(
+      path.join(repositoryPath, ".git"),
+    );
+  });
 });
 
 function createWorkspace(): string {

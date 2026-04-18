@@ -81,11 +81,20 @@ managed manual workflow worktree.
 - **WHEN** a successful pull-request CI merge would fast-forward the mirrored
   repository to a commit that tracks the top-level `workflow1` path
 - **AND** `.data/repos/<repo>/workflow1` currently exists as the managed linked
-  worktree
-- **THEN** the runner SHALL remove that managed linked worktree before mutating
+  worktree or recoverable Git-owned residue from that managed slot
+- **THEN** the runner SHALL remove that managed worktree state before mutating
   the mirrored repository
 - **AND** the mirrored repository SHALL remain clean after the fast-forward
   merge completes
+
+#### Scenario: Dirty non-worktree residue blocks the fast-forward merge
+- **WHEN** a successful pull-request CI merge would fast-forward the mirrored
+  repository to a commit that tracks the top-level `workflow1` path
+- **AND** `.data/repos/<repo>/workflow1` contains ordinary repository content or
+  unregistered residue that would leave the mirrored repository dirty
+- **THEN** the runner SHALL fail the merge before mutating the mirrored
+  repository
+- **AND** the colliding content SHALL be left untouched for manual repair
 
 ### Requirement: Managed workflow worktrees persist across normal completion
 The system SHALL keep `.data/repos/<repo>/workflow1` after a normal manual
