@@ -44,6 +44,42 @@ describe("validateWorkflowRunRequest", () => {
       ),
     ).toThrowError(WorkflowRunRequestError);
   });
+
+  it("keeps the owning repository name stable when the execution path is a repo worktree", () => {
+    const workspace = createWorkspace();
+
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+
+    const workflowRepositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
+
+    expect(
+      validateWorkflowRunRequest(
+        {
+          publishedBranch: {
+            repositoryPath: workflowRepositoryPath,
+            branchName: "feature/test",
+            commitHash: "abcdef1",
+          },
+          workflowName: "lint",
+        },
+        {
+          cwd: workspace,
+        },
+      ),
+    ).toEqual({
+      publishedBranch: {
+        repositoryPath: workflowRepositoryPath,
+        branchName: "feature/test",
+        commitHash: "abcdef1",
+        remoteName: undefined,
+        pushedAt: undefined,
+      },
+      repositoryName: "alpha",
+      repositoryPath,
+      executionRepositoryPath: workflowRepositoryPath,
+      workflowName: "lint",
+    });
+  });
 });
 
 describe("validateWorkflowRunDetailRequest", () => {
@@ -149,4 +185,24 @@ function createRepositorySkeleton(workspace: string, repositoryName: string): st
   mkdirSync(path.join(repositoryPath, ".git"), { recursive: true });
 
   return repositoryPath;
+}
+
+function createRepositoryWorktree(
+  workspace: string,
+  repositoryName: string,
+  worktreeName: string,
+): string {
+  const worktreePath = path.join(
+    workspace,
+    ".data",
+    "repos",
+    repositoryName,
+    ".ugit",
+    "worktrees",
+    worktreeName,
+  );
+
+  mkdirSync(path.join(worktreePath, ".git"), { recursive: true });
+
+  return worktreePath;
 }

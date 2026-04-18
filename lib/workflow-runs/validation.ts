@@ -23,6 +23,7 @@ export type ValidatedWorkflowRunRequest = Readonly<{
   publishedBranch: GitPlatformPublishedBranch;
   repositoryName: string;
   repositoryPath: string;
+  executionRepositoryPath: string;
   workflowName: string;
 }>;
 
@@ -82,7 +83,10 @@ export function validateWorkflowRunRequest(
 ): ValidatedWorkflowRunRequest {
   const request = asRecord(payload, "The workflow-run payload");
   const publishedBranch = normalizePublishedBranch(request.publishedBranch);
-  const repository = normalizeRepositoryTarget(publishedBranch.repositoryPath, options.cwd);
+  const repository = resolveWorkflowRunRepositoryTarget(
+    publishedBranch.repositoryPath,
+    options.cwd,
+  );
   const workflowName = readRequiredString(request.workflowName, "workflowName");
 
   if (!WORKFLOW_NAME_PATTERN.test(workflowName) || workflowName === "." || workflowName === "..") {
@@ -95,10 +99,11 @@ export function validateWorkflowRunRequest(
   return {
     publishedBranch: {
       ...publishedBranch,
-      repositoryPath: repository.repositoryPath,
+      repositoryPath: repository.executionRepositoryPath,
     },
     repositoryName: repository.repositoryName,
     repositoryPath: repository.repositoryPath,
+    executionRepositoryPath: repository.executionRepositoryPath,
     workflowName,
   };
 }
@@ -158,13 +163,31 @@ function normalizePublishedBranch(value: unknown): GitPlatformPublishedBranch {
   };
 }
 
-function normalizeRepositoryTarget(
+export function resolveWorkflowRunRepositoryTarget(
   repositoryPathValue: string,
   cwd: string | undefined,
 ): Readonly<{
   repositoryName: string;
   repositoryPath: string;
+  executionRepositoryPath: string;
 }> {
+  const executionRepositoryPath = normalizeWorkflowExecutionPath(repositoryPathValue, cwd);
+  const repositoryName = resolveWorkflowRepositoryNameFromPath(executionRepositoryPath, cwd);
+  const repository = resolveWorkflowReadRepository(repositoryName, {
+    cwd,
+  });
+
+  return {
+    repositoryName: repository.repositoryName,
+    repositoryPath: repository.repositoryPath,
+    executionRepositoryPath,
+  };
+}
+
+function normalizeWorkflowExecutionPath(
+  repositoryPathValue: string,
+  cwd: string | undefined,
+): string {
   const repositoriesRoot = getRepositoriesRoot(cwd);
   const repositoryPath = path.normalize(repositoryPathValue);
   const relativeRepositoryPath = path.relative(repositoriesRoot, repositoryPath);
@@ -187,10 +210,28 @@ function normalizeRepositoryTarget(
     );
   }
 
-  return {
-    repositoryName: path.basename(repositoryPath),
-    repositoryPath,
-  };
+  return repositoryPath;
+}
+
+function resolveWorkflowRepositoryNameFromPath(
+  repositoryPath: string,
+  cwd: string | undefined,
+): string {
+  const relativeRepositoryPath = path.relative(getRepositoriesRoot(cwd), repositoryPath);
+  const repositoryNameCandidate = relativeRepositoryPath
+    .split(path.sep)
+    .find((segment) => segment.length > 0);
+
+  if (!repositoryNameCandidate) {
+    throw new WorkflowRunRequestError(
+      `ugit repository ${repositoryPath} does not exist on the server.`,
+      404,
+    );
+  }
+
+  return resolveWorkflowReadRepository(repositoryNameCandidate, {
+    cwd,
+  }).repositoryName;
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {

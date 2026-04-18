@@ -104,6 +104,38 @@ describe("claimRunnableExecutions", () => {
       }),
     ]);
   });
+
+  it("does not claim a repo worktree workflow run while the owning repository already has a queued job", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const workflowRepositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queuePullRequestSynchronization(createPullRequestRequest(repositoryPath, "abcdef1"), {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      jobIdFactory: createIdFactory("job-1"),
+    });
+    queueWorkflowRun(createWorkflowRequest(workflowRepositoryPath, "abcdef2", "lint"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+    });
+
+    expect(
+      claimRunnableExecutions({
+        storage,
+        now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "pull_request",
+        id: "job-1",
+        repositoryPath,
+      }),
+    ]);
+  });
 });
 
 describe("repo-scoped workflow run reads", () => {
@@ -142,6 +174,40 @@ describe("repo-scoped workflow run reads", () => {
         repositoryPath: repositoryA,
       },
     ]);
+  });
+
+  it("stores repo worktree runs under the owning repository identity", () => {
+    const workspace = createWorkspace();
+
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+
+    const workflowRepositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queueWorkflowRun(createWorkflowRequest(workflowRepositoryPath, "abcdef1", "lint"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+    });
+
+    expect(readWorkflowRun("workflow-1", storage)).toMatchObject({
+      id: "workflow-1",
+      repositoryName: "alpha",
+      repositoryPath,
+    });
+    expect(listWorkflowRuns("alpha", { storage })).toMatchObject([
+      {
+        id: "workflow-1",
+        repositoryName: "alpha",
+        repositoryPath,
+      },
+    ]);
+    expect(readWorkflowRunForRepository("alpha", "workflow-1", storage)).toMatchObject({
+      id: "workflow-1",
+      repositoryName: "alpha",
+      repositoryPath,
+    });
   });
 
   it("keeps repo-scoped workflow reads stable when the stored path drifts", () => {
@@ -205,6 +271,26 @@ function createRepositorySkeleton(workspace: string, repositoryName: string): st
   return repositoryPath;
 }
 
+function createRepositoryWorktree(
+  workspace: string,
+  repositoryName: string,
+  worktreeName: string,
+): string {
+  const worktreePath = path.join(
+    workspace,
+    ".data",
+    "repos",
+    repositoryName,
+    ".ugit",
+    "worktrees",
+    worktreeName,
+  );
+
+  mkdirSync(path.join(worktreePath, ".git"), { recursive: true });
+
+  return worktreePath;
+}
+
 function createPullRequestRequest(
   repositoryPath: string,
   commitHash: string,
@@ -232,16 +318,19 @@ function createPullRequestRequest(
 }
 
 function createWorkflowRequest(
-  repositoryPath: string,
+  executionRepositoryPath: string,
   commitHash: string,
   workflowName: string,
   branchName: string = "feature/test",
 ): ValidatedWorkflowRunRequest {
+  const { repositoryName, repositoryPath } = resolveOwningRepositoryTarget(executionRepositoryPath);
+
   return {
-    repositoryName: path.basename(repositoryPath),
+    repositoryName,
     repositoryPath,
+    executionRepositoryPath,
     publishedBranch: {
-      repositoryPath,
+      repositoryPath: executionRepositoryPath,
       branchName,
       commitHash,
       remoteName: "origin",
@@ -290,4 +379,33 @@ function driftWorkflowRunRepositoryPath(
       )
       .run(repositoryPath, workflowId);
   });
+}
+
+function resolveOwningRepositoryTarget(repositoryPath: string): {
+  repositoryName: string;
+  repositoryPath: string;
+} {
+  const repositoriesRootSegment = `${path.sep}repos${path.sep}`;
+  const repositoriesIndex = repositoryPath.lastIndexOf(repositoriesRootSegment);
+
+  if (repositoriesIndex < 0) {
+    throw new Error(`Expected ${repositoryPath} to be nested under .data/repos.`);
+  }
+
+  const repositoryRoot = repositoryPath
+    .slice(repositoriesIndex + repositoriesRootSegment.length)
+    .split(path.sep)
+    .filter((segment) => segment.length > 0)[0];
+
+  if (!repositoryRoot) {
+    throw new Error(`Expected ${repositoryPath} to include a repository name.`);
+  }
+
+  return {
+    repositoryName: repositoryRoot,
+    repositoryPath: repositoryPath.slice(
+      0,
+      repositoriesIndex + repositoriesRootSegment.length + repositoryRoot.length,
+    ),
+  };
 }

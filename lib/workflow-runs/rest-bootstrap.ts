@@ -1,6 +1,7 @@
 import "server-only";
 
 import { headers } from "next/headers";
+import { buildRepositoryWorkflowRunsPath } from "@/lib/workflow-runs/rest-paths";
 
 const DEFAULT_WORKFLOW_BOOTSTRAP_ORIGIN = "http://localhost";
 
@@ -8,9 +9,10 @@ type HeaderReader = Pick<Headers, "get">;
 
 export async function buildWorkflowRunsBootstrapUrl(repositoryName: string): Promise<string> {
   const requestHeaders = await headers();
-  const url = new URL("/api/workflows/runs", resolveRequestOrigin(requestHeaders));
-
-  url.searchParams.set("repositoryName", repositoryName);
+  const url = new URL(
+    buildRepositoryWorkflowRunsPath(repositoryName),
+    resolveRequestOrigin(requestHeaders),
+  );
 
   return url.toString();
 }
