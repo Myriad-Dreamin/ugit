@@ -83,6 +83,8 @@ type PreparedCreateRepository = Readonly<{
   existingOriginUrl: string | null;
 }>;
 
+type LocalOriginMutation = "added" | "updated" | null;
+
 export function inspectCreateRepositoryOriginConflict(
   options: CreateRepositoryOptions,
 ): CreateRepositoryOriginConflict | null {
@@ -128,25 +130,8 @@ export function createRepository(options: CreateRepositoryOptions): CreateReposi
     );
   }
 
-  if (!prepared.existingOriginUrl) {
-    runGit(
-      prepared.repositoryPath,
-      ["remote", "add", ORIGIN_REMOTE_NAME, prepared.originUrl],
-      prepared.runCommand,
-    );
-  } else if (originConflict) {
-    runGit(
-      prepared.repositoryPath,
-      ["remote", "set-url", ORIGIN_REMOTE_NAME, prepared.originUrl],
-      prepared.runCommand,
-    );
-  }
-
-  runGit(
-    prepared.repositoryPath,
-    ["config", "--local", MACHINE_CONFIG_KEY, prepared.machine.name],
-    prepared.runCommand,
-  );
+  const localOriginMutation = configureLocalOrigin(prepared, originConflict);
+  configureLocalMachine(prepared, localOriginMutation);
 
   return {
     machineName: prepared.machine.name,
@@ -212,6 +197,102 @@ function getCreateRepositoryOriginConflict(
     existingOriginUrl: prepared.existingOriginUrl,
     originUrl: prepared.originUrl,
   };
+}
+
+function configureLocalOrigin(
+  prepared: PreparedCreateRepository,
+  originConflict: CreateRepositoryOriginConflict | null,
+): LocalOriginMutation {
+  const recordMachineCommand = createLocalGitCommand(prepared.repositoryPath, [
+    "config",
+    "--local",
+    MACHINE_CONFIG_KEY,
+    prepared.machine.name,
+  ]);
+
+  if (!prepared.existingOriginUrl) {
+    const addOriginArgs = ["remote", "add", ORIGIN_REMOTE_NAME, prepared.originUrl];
+
+    try {
+      runGit(prepared.repositoryPath, addOriginArgs, prepared.runCommand);
+    } catch (error) {
+      throw createLocalSetupError(
+        prepared,
+        `, but failed to add local "${ORIGIN_REMOTE_NAME}" in ${prepared.repositoryPath}.`,
+        [createLocalGitCommand(prepared.repositoryPath, addOriginArgs), recordMachineCommand],
+        error,
+      );
+    }
+
+    return "added";
+  }
+
+  if (!originConflict) {
+    return null;
+  }
+
+  const replaceOriginArgs = ["remote", "set-url", ORIGIN_REMOTE_NAME, prepared.originUrl];
+
+  try {
+    runGit(prepared.repositoryPath, replaceOriginArgs, prepared.runCommand);
+  } catch (error) {
+    throw createLocalSetupError(
+      prepared,
+      `, but failed to replace local "${ORIGIN_REMOTE_NAME}" in ${prepared.repositoryPath}.`,
+      [createLocalGitCommand(prepared.repositoryPath, replaceOriginArgs), recordMachineCommand],
+      error,
+    );
+  }
+
+  return "updated";
+}
+
+function configureLocalMachine(
+  prepared: PreparedCreateRepository,
+  localOriginMutation: LocalOriginMutation,
+): void {
+  const recordMachineArgs = ["config", "--local", MACHINE_CONFIG_KEY, prepared.machine.name];
+
+  try {
+    runGit(prepared.repositoryPath, recordMachineArgs, prepared.runCommand);
+  } catch (error) {
+    const localSetupPrefix = getLocalMachineFailurePrefix(localOriginMutation);
+
+    throw createLocalSetupError(
+      prepared,
+      `${localSetupPrefix} failed to record machine "${prepared.machine.name}" in ${prepared.repositoryPath}.`,
+      [createLocalGitCommand(prepared.repositoryPath, recordMachineArgs)],
+      error,
+    );
+  }
+}
+
+function getLocalMachineFailurePrefix(localOriginMutation: LocalOriginMutation): string {
+  if (localOriginMutation === "added") {
+    return ` and added local "${ORIGIN_REMOTE_NAME}", but`;
+  }
+
+  if (localOriginMutation === "updated") {
+    return ` and updated local "${ORIGIN_REMOTE_NAME}", but`;
+  }
+
+  return ", but";
+}
+
+function createLocalSetupError(
+  prepared: PreparedCreateRepository,
+  failureDetail: string,
+  recoveryCommands: readonly string[],
+  cause: unknown,
+): Error {
+  return new Error(
+    `Created ugit repository ${prepared.remoteRepositoryPath} on machine "${prepared.machine.name}"${failureDetail} The remote repository now exists at ${prepared.remoteRepositoryPath}, so rerunning ugit create will fail until you remove it or finish the remaining local setup manually. Finish setup with:\n${recoveryCommands.map((command) => `  ${command}`).join("\n")}`,
+    { cause },
+  );
+}
+
+function createLocalGitCommand(repositoryPath: string, args: readonly string[]): string {
+  return ["git", "-C", repositoryPath, ...args].join(" ");
 }
 
 function createMachineHost(
