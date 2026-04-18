@@ -17,26 +17,53 @@ export async function buildWorkflowRunsBootstrapUrl(repositoryName: string): Pro
 
 function resolveRequestOrigin(requestHeaders: HeaderReader): string {
   const host =
-    readFirstHeaderValue(requestHeaders, "x-forwarded-host") ??
-    readFirstHeaderValue(requestHeaders, "host");
+    readLastHeaderValue(requestHeaders, "x-forwarded-host") ?? readHostHeaderValue(requestHeaders);
 
   if (!host) {
     return DEFAULT_WORKFLOW_BOOTSTRAP_ORIGIN;
   }
 
-  const protocol = readFirstHeaderValue(requestHeaders, "x-forwarded-proto") ?? "http";
+  const protocol =
+    normalizeProtocol(readLastHeaderValue(requestHeaders, "x-forwarded-proto")) ?? "http";
 
-  return `${protocol}://${host}`;
+  try {
+    return new URL(`${protocol}://${host}`).origin;
+  } catch {
+    return DEFAULT_WORKFLOW_BOOTSTRAP_ORIGIN;
+  }
 }
 
-function readFirstHeaderValue(requestHeaders: HeaderReader, headerName: string): string | null {
+function readHostHeaderValue(requestHeaders: HeaderReader): string | null {
+  const value = requestHeaders.get("host");
+
+  return value?.trim() || null;
+}
+
+function normalizeProtocol(protocol: string | null): string | null {
+  if (!protocol) {
+    return null;
+  }
+
+  const normalizedProtocol = protocol.toLowerCase();
+
+  if (normalizedProtocol === "http" || normalizedProtocol === "https") {
+    return normalizedProtocol;
+  }
+
+  return null;
+}
+
+function readLastHeaderValue(requestHeaders: HeaderReader, headerName: string): string | null {
   const value = requestHeaders.get(headerName);
 
   if (!value) {
     return null;
   }
 
-  const [firstValue] = value.split(",");
+  const forwardedValues = value
+    .split(",")
+    .map((forwardedValue) => forwardedValue.trim())
+    .filter(Boolean);
 
-  return firstValue?.trim() || null;
+  return forwardedValues.at(-1) ?? null;
 }
