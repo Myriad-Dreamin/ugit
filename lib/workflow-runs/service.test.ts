@@ -77,7 +77,10 @@ describe("queueWorkflowRun service", () => {
 describe("repo-scoped workflow services", () => {
   it("lists repository workflow summaries through the shared service DTO", () => {
     const workspace = createWorkspace();
-    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+
+    createRepositorySkeleton(workspace, "alpha");
+
+    const repositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
     const storage = path.join(workspace, "storage", "pull-requests");
 
     queueWorkflowRun(createPayload(repositoryPath), {
@@ -363,6 +366,26 @@ function createRepositorySkeleton(workspace: string, repositoryName: string): st
   mkdirSync(path.join(repositoryPath, ".git"), { recursive: true });
 
   return repositoryPath;
+}
+
+function createRepositoryWorktree(
+  workspace: string,
+  repositoryName: string,
+  worktreeName: string,
+): string {
+  const worktreePath = path.join(
+    workspace,
+    ".data",
+    "repos",
+    repositoryName,
+    ".ugit",
+    "worktrees",
+    worktreeName,
+  );
+
+  mkdirSync(path.join(worktreePath, ".git"), { recursive: true });
+
+  return worktreePath;
 }
 
 function createPayload(repositoryPath: string): Record<string, unknown> {

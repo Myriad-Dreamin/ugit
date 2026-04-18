@@ -144,6 +144,40 @@ describe("repo-scoped workflow run reads", () => {
     ]);
   });
 
+  it("stores repo worktree runs under the owning repository identity", () => {
+    const workspace = createWorkspace();
+
+    createRepositorySkeleton(workspace, "alpha");
+
+    const workflowRepositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queueWorkflowRun(createWorkflowRequest(workflowRepositoryPath, "abcdef1", "lint"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+    });
+
+    expect(readWorkflowRun("workflow-1", storage)).toMatchObject({
+      id: "workflow-1",
+      repositoryName: "alpha",
+      repositoryPath: workflowRepositoryPath,
+    });
+    expect(listWorkflowRuns("alpha", { storage })).toMatchObject([
+      {
+        id: "workflow-1",
+        repositoryName: "alpha",
+        repositoryPath: workflowRepositoryPath,
+      },
+    ]);
+    expect(readWorkflowRunForRepository("alpha", "workflow-1", storage)).toMatchObject({
+      id: "workflow-1",
+      repositoryName: "alpha",
+      repositoryPath: workflowRepositoryPath,
+    });
+  });
+
   it("keeps repo-scoped workflow reads stable when the stored path drifts", () => {
     const workspace = createWorkspace();
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
@@ -203,6 +237,26 @@ function createRepositorySkeleton(workspace: string, repositoryName: string): st
   mkdirSync(path.join(repositoryPath, ".git"), { recursive: true });
 
   return repositoryPath;
+}
+
+function createRepositoryWorktree(
+  workspace: string,
+  repositoryName: string,
+  worktreeName: string,
+): string {
+  const worktreePath = path.join(
+    workspace,
+    ".data",
+    "repos",
+    repositoryName,
+    ".ugit",
+    "worktrees",
+    worktreeName,
+  );
+
+  mkdirSync(path.join(worktreePath, ".git"), { recursive: true });
+
+  return worktreePath;
 }
 
 function createPullRequestRequest(

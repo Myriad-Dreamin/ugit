@@ -8,6 +8,7 @@ import {
   formatWorkflowTimestamp,
   isWorkflowRunActive,
 } from "@/lib/workflow-runs/presentation";
+import { buildRepositoryWorkflowRunsPath } from "@/lib/workflow-runs/rest-paths";
 import type {
   ListWorkflowRunsResponse,
   WorkflowRunSummary,
@@ -28,10 +29,7 @@ export function WorkflowRunsListClient({
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const refreshWorkflowRuns = useEffectEvent(async () => {
-    const searchParams = new URLSearchParams({
-      repositoryName,
-    });
-    const response = await fetch(`/api/workflows/runs?${searchParams.toString()}`, {
+    const response = await fetch(buildRepositoryWorkflowRunsPath(repositoryName), {
       cache: "no-store",
     });
 

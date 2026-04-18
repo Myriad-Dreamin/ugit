@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { GET as getWorkflowLogsRoute } from "@/app/api/workflows/logs/route";
 import { GET as getWorkflowRunRoute } from "@/app/api/workflows/runs/[workflowId]/route";
 import { GET as getWorkflowRunsRoute } from "@/app/api/workflows/runs/route";
-import { completeWorkflowRun, readWorkflowRun } from "@/lib/pr-runner/storage";
+import {
+  claimRunnableExecutions,
+  completeWorkflowRun,
+  readWorkflowRun,
+} from "@/lib/pr-runner/storage";
 import { resetStorageCacheForTests, withStorage } from "@/lib/storage/sqlite";
 import { appendWorkflowRunLog } from "@/lib/workflow-runs/log-storage";
 import { queueWorkflowRun } from "@/lib/workflow-runs/service";
@@ -27,6 +31,72 @@ afterEach(() => {
 });
 
 describe("repo-scoped workflow API repository identity", () => {
+  it("keeps queued, running, and completed repo worktree runs visible through list refreshes", async () => {
+    const workspace = createWorkspace();
+
+    createRepositorySkeleton(workspace, "alpha");
+
+    const workflowRepositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
+
+    process.chdir(workspace);
+
+    queueWorkflowRun(createPayload(workflowRepositoryPath), {
+      cwd: workspace,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+      nudgeRunner: async () => undefined,
+    });
+
+    expect(await readWorkflowRunsPayload("alpha")).toEqual({
+      repositoryName: "alpha",
+      workflowRuns: [
+        expect.objectContaining({
+          id: "workflow-1",
+          repositoryName: "alpha",
+          status: "queued",
+        }),
+      ],
+    });
+    expect(claimRunnableExecutions({ now: createNowFactory("2026-04-14T00:00:05.000Z") })).toEqual([
+      expect.objectContaining({
+        kind: "workflow_run",
+        id: "workflow-1",
+        repositoryName: "alpha",
+        repositoryPath: workflowRepositoryPath,
+      }),
+    ]);
+    expect(await readWorkflowRunsPayload("alpha")).toEqual({
+      repositoryName: "alpha",
+      workflowRuns: [
+        expect.objectContaining({
+          id: "workflow-1",
+          repositoryName: "alpha",
+          status: "running",
+        }),
+      ],
+    });
+
+    completeWorkflowRun({
+      workflowId: "workflow-1",
+      status: "succeeded",
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+    });
+
+    const completedPayload = await readWorkflowRunsPayload("alpha");
+
+    expect(completedPayload).toEqual({
+      repositoryName: "alpha",
+      workflowRuns: [
+        expect.objectContaining({
+          id: "workflow-1",
+          repositoryName: "alpha",
+          status: "succeeded",
+        }),
+      ],
+    });
+    expect(completedPayload.workflowRuns[0]).not.toHaveProperty("repositoryPath");
+  });
+
   it("returns repo-scoped list, detail, and logs after the stored path drifts", async () => {
     const workspace = createWorkspace();
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
@@ -145,6 +215,26 @@ function createRepositorySkeleton(workspace: string, repositoryName: string): st
   return repositoryPath;
 }
 
+function createRepositoryWorktree(
+  workspace: string,
+  repositoryName: string,
+  worktreeName: string,
+): string {
+  const worktreePath = path.join(
+    workspace,
+    ".data",
+    "repos",
+    repositoryName,
+    ".ugit",
+    "worktrees",
+    worktreeName,
+  );
+
+  mkdirSync(path.join(worktreePath, ".git"), { recursive: true });
+
+  return worktreePath;
+}
+
 function createPayload(repositoryPath: string): Record<string, unknown> {
   return {
     publishedBranch: {
@@ -154,6 +244,22 @@ function createPayload(repositoryPath: string): Record<string, unknown> {
       remoteName: "origin",
     },
     workflowName: "lint",
+  };
+}
+
+async function readWorkflowRunsPayload(repositoryName: string): Promise<{
+  repositoryName: string;
+  workflowRuns: Array<Record<string, unknown>>;
+}> {
+  const response = await getWorkflowRunsRoute(
+    new Request(`http://localhost/api/workflows/runs?repositoryName=${repositoryName}`),
+  );
+
+  expect(response.status).toBe(200);
+
+  return (await response.json()) as {
+    repositoryName: string;
+    workflowRuns: Array<Record<string, unknown>>;
   };
 }
 

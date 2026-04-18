@@ -15,7 +15,10 @@ import type {
 } from "./validation";
 import { PullRequestRequestError } from "./validation";
 import { getWorkflowRunLogPath } from "@/lib/workflow-runs/log-storage";
-import type { ValidatedWorkflowRunRequest } from "@/lib/workflow-runs/validation";
+import {
+  resolveWorkflowRunRepositoryTarget,
+  type ValidatedWorkflowRunRequest,
+} from "@/lib/workflow-runs/validation";
 
 export const MAX_ACTIVE_CI_JOBS = 4;
 export const SUPERSEDED_CI_JOB_MESSAGE =
@@ -570,6 +573,7 @@ export function queueWorkflowRun(
   options: QueueWorkflowRunOptions = {},
 ): QueueWorkflowRunResult {
   ensurePullRequestStorage(options.storage);
+  const repository = resolveWorkflowRunRepositoryTarget(request.repositoryPath, options.cwd);
 
   return withStorage(options.storage, (database) =>
     runStorageTransaction(
@@ -579,7 +583,7 @@ export function queueWorkflowRun(
         const workflowId = (options.workflowIdFactory ?? randomUUID)();
         const logPath = getWorkflowRunLogPath(
           workflowId,
-          request.repositoryName,
+          repository.repositoryName,
           options.cwd ?? process.cwd(),
         );
 
@@ -616,8 +620,8 @@ export function queueWorkflowRun(
           )
           .run(
             workflowId,
-            request.repositoryName,
-            request.repositoryPath,
+            repository.repositoryName,
+            repository.repositoryPath,
             request.publishedBranch.branchName,
             request.publishedBranch.commitHash,
             request.workflowName,
