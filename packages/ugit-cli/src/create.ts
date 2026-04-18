@@ -34,6 +34,7 @@ export type CreateRepositoryOriginConflictResolution = "reject" | "replace";
 
 export type CreateRepositoryOptions = Readonly<{
   machineName: string;
+  repositoryName: string;
   directory?: string;
   cwd?: string;
   config?: UgitConfig;
@@ -150,6 +151,7 @@ function prepareCreateRepository(options: CreateRepositoryOptions): PreparedCrea
   const createDirectory = options.createDirectory ?? createLocalDirectory;
   const pathExists = options.pathExists ?? existsSync;
   const config = options.config ?? options.loadConfig?.() ?? loadConfig();
+  const repositoryName = validateRemoteRepositoryName(options.repositoryName);
   const requestedDirectory = path.resolve(cwd, options.directory ?? ".");
 
   if (!pathExists(requestedDirectory)) {
@@ -157,11 +159,6 @@ function prepareCreateRepository(options: CreateRepositoryOptions): PreparedCrea
   }
 
   const repositoryPath = resolveRepositoryRoot(requestedDirectory, runCommand);
-  const repositoryName = path.basename(repositoryPath);
-
-  if (repositoryName.length === 0) {
-    throw new Error(`Unable to derive a repository name from ${repositoryPath}.`);
-  }
 
   const upstreamUrl = readOptionalRemoteUrl(repositoryPath, UPSTREAM_REMOTE_NAME, runCommand);
 
@@ -185,6 +182,22 @@ function prepareCreateRepository(options: CreateRepositoryOptions): PreparedCrea
     originUrl: getRemoteRepositoryUrl(machine, repositoryName),
     existingOriginUrl: readOptionalRemoteUrl(repositoryPath, ORIGIN_REMOTE_NAME, runCommand),
   };
+}
+
+function validateRemoteRepositoryName(repositoryName: string): string {
+  if (
+    repositoryName.length === 0 ||
+    repositoryName === "." ||
+    repositoryName === ".." ||
+    repositoryName.includes("/") ||
+    repositoryName.includes("\\")
+  ) {
+    throw new Error(
+      'Remote repository name must be one safe path segment (non-empty, not "." or "..", and without path separators).',
+    );
+  }
+
+  return repositoryName;
 }
 
 function getCreateRepositoryOriginConflict(

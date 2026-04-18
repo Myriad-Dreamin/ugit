@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRepository, type CommandRunner, type CommandRunnerOptions } from "./create";
+import {
+  createRepository,
+  inspectCreateRepositoryOriginConflict,
+  type CommandRunner,
+  type CommandRunnerOptions,
+} from "./create";
 import type { UgitConfig } from "./config";
 
 const workspaces: string[] = [];
@@ -26,6 +31,7 @@ describe("createRepository preconditions", () => {
       createRepository({
         config: createLocalConfig(createWorkspace()),
         machineName: "local",
+        repositoryName: "alpha",
         directory,
       }),
     ).toThrow(`Directory ${directory} is not an existing Git repository root.`);
@@ -38,6 +44,7 @@ describe("createRepository preconditions", () => {
       createRepository({
         config: createLocalConfig(createWorkspace()),
         machineName: "local",
+        repositoryName: "alpha",
         directory: repositoryPath,
       }),
     ).toThrow(
@@ -56,6 +63,7 @@ describe("createRepository preconditions", () => {
       createRepository({
         config: createLocalConfig(createWorkspace()),
         machineName: "local",
+        repositoryName: "alpha",
         directory: repositoryPath,
         createDirectory,
       }),
@@ -64,12 +72,34 @@ describe("createRepository preconditions", () => {
     );
     expect(createDirectory).not.toHaveBeenCalled();
   });
+
+  it.each(["", ".", "..", "team/repo", "team\\repo"])(
+    'rejects invalid remote repository names like "%s"',
+    (repositoryName) => {
+      const repositoryPath = createGitRepository();
+      const createDirectory = vi.fn();
+
+      git(repositoryPath, ["remote", "add", "upstream", "https://github.com/example/upstream.git"]);
+
+      expect(() =>
+        createRepository({
+          config: createLocalConfig(createWorkspace()),
+          machineName: "local",
+          repositoryName,
+          directory: repositoryPath,
+          createDirectory,
+        }),
+      ).toThrow("Remote repository name must be one safe path segment");
+      expect(createDirectory).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("createRepository", () => {
   it("replaces a conflicting local origin when replacement is approved", () => {
     const repositoryPath = createGitRepository();
     const machineRoot = createWorkspace();
+    const repositoryName = "canonical-repo";
     const upstreamUrl = "https://github.com/example/upstream.git";
 
     git(repositoryPath, ["remote", "add", "upstream", upstreamUrl]);
@@ -78,6 +108,7 @@ describe("createRepository", () => {
     const result = createRepository({
       config: createLocalConfig(machineRoot),
       machineName: "local",
+      repositoryName,
       directory: repositoryPath,
       originConflictResolution: "replace",
     });
@@ -89,6 +120,7 @@ describe("createRepository", () => {
   it("initializes a local ugit repository and records the selected machine", () => {
     const repositoryPath = createGitRepository();
     const machineRoot = createWorkspace();
+    const repositoryName = "canonical-repo";
     const upstreamUrl = "https://github.com/example/upstream.git";
 
     git(repositoryPath, ["remote", "add", "upstream", upstreamUrl]);
@@ -97,15 +129,16 @@ describe("createRepository", () => {
     const result = createRepository({
       config: createLocalConfig(machineRoot),
       machineName: "local",
+      repositoryName,
       directory: repositoryPath,
     });
 
     expect(result).toEqual({
       machineName: "local",
-      repositoryName: path.basename(repositoryPath),
+      repositoryName,
       repositoryPath,
-      remoteRepositoryPath: path.join(machineRoot, ".data", "repos", path.basename(repositoryPath)),
-      originUrl: path.join(machineRoot, ".data", "repos", path.basename(repositoryPath)),
+      remoteRepositoryPath: path.join(machineRoot, ".data", "repos", repositoryName),
+      originUrl: path.join(machineRoot, ".data", "repos", repositoryName),
     });
     expect(git(repositoryPath, ["remote", "get-url", "origin"])).toBe(result.originUrl);
     expect(git(repositoryPath, ["config", "--local", "--get", "ugit.machine"])).toBe("local");
@@ -121,6 +154,7 @@ describe("createRepository", () => {
 
   it("orchestrates ssh-backed repository setup with mocked child processes", () => {
     const repositoryPath = "/workspace/example-repo";
+    const repositoryName = "canonical-repo";
     const recordedCalls: Array<{
       command: string;
       args: string[];
@@ -169,7 +203,7 @@ describe("createRepository", () => {
 
           if (
             remoteCommand.includes("test") &&
-            remoteCommand.includes("/srv/ugit/.data/repos/example-repo")
+            remoteCommand.includes("/srv/ugit/.data/repos/canonical-repo")
           ) {
             throw createExecError("", 1);
           }
@@ -204,6 +238,7 @@ describe("createRepository", () => {
     const result = createRepository({
       config: createRemoteConfig("/srv/ugit"),
       machineName: "machine-x",
+      repositoryName,
       directory: repositoryPath,
       cwd: "/",
       runCommand,
@@ -212,17 +247,17 @@ describe("createRepository", () => {
 
     expect(result).toEqual({
       machineName: "machine-x",
-      repositoryName: "example-repo",
+      repositoryName,
       repositoryPath,
-      remoteRepositoryPath: "/srv/ugit/.data/repos/example-repo",
-      originUrl: "ssh://kamiya-machine-x/srv/ugit/.data/repos/example-repo",
+      remoteRepositoryPath: "/srv/ugit/.data/repos/canonical-repo",
+      originUrl: "ssh://kamiya-machine-x/srv/ugit/.data/repos/canonical-repo",
     });
     expect(
       recordedCalls.some(
         (call) =>
           call.command === "ssh" &&
           (call.args.at(-1) ?? "").includes("init.defaultBranch") &&
-          (call.args.at(-1) ?? "").includes("/srv/ugit/.data/repos/example-repo"),
+          (call.args.at(-1) ?? "").includes("/srv/ugit/.data/repos/canonical-repo"),
       ),
     ).toBe(true);
     expect(
@@ -244,7 +279,12 @@ describe("createRepository", () => {
     ).toBe(true);
     expect(recordedCalls).toContainEqual({
       command: "git",
-      args: ["remote", "add", "origin", "ssh://kamiya-machine-x/srv/ugit/.data/repos/example-repo"],
+      args: [
+        "remote",
+        "add",
+        "origin",
+        "ssh://kamiya-machine-x/srv/ugit/.data/repos/canonical-repo",
+      ],
       cwd: repositoryPath,
     });
     expect(recordedCalls).toContainEqual({
@@ -256,6 +296,7 @@ describe("createRepository", () => {
 
   it("uses git remote set-url when ssh-backed setup replaces a conflicting origin", () => {
     const repositoryPath = "/workspace/example-repo";
+    const repositoryName = "canonical-repo";
     const recordedCalls: Array<{
       command: string;
       args: string[];
@@ -304,7 +345,7 @@ describe("createRepository", () => {
 
           if (
             remoteCommand.includes("test") &&
-            remoteCommand.includes("/srv/ugit/.data/repos/example-repo")
+            remoteCommand.includes("/srv/ugit/.data/repos/canonical-repo")
           ) {
             throw createExecError("", 1);
           }
@@ -339,6 +380,7 @@ describe("createRepository", () => {
     createRepository({
       config: createRemoteConfig("/srv/ugit"),
       machineName: "machine-x",
+      repositoryName,
       directory: repositoryPath,
       cwd: "/",
       runCommand,
@@ -352,7 +394,7 @@ describe("createRepository", () => {
         "remote",
         "set-url",
         "origin",
-        "ssh://kamiya-machine-x/srv/ugit/.data/repos/example-repo",
+        "ssh://kamiya-machine-x/srv/ugit/.data/repos/canonical-repo",
       ],
       cwd: repositoryPath,
     });
@@ -370,11 +412,13 @@ describe("createRepository", () => {
 
   it("describes manual recovery when replacing origin fails after remote setup", () => {
     const repositoryPath = "/workspace/example-repo";
+    const repositoryName = "canonical-repo";
 
     const error = captureThrownError(() =>
       createRepository({
         config: createRemoteConfig("/srv/ugit"),
         machineName: "machine-x",
+        repositoryName,
         directory: repositoryPath,
         cwd: "/",
         pathExists: () => true,
@@ -419,7 +463,7 @@ describe("createRepository", () => {
 
               if (
                 remoteCommand.includes("test") &&
-                remoteCommand.includes("/srv/ugit/.data/repos/example-repo")
+                remoteCommand.includes("/srv/ugit/.data/repos/canonical-repo")
               ) {
                 throw createExecError("", 1);
               }
@@ -454,13 +498,13 @@ describe("createRepository", () => {
     );
 
     expect(error.message).toContain(
-      'Created ugit repository /srv/ugit/.data/repos/example-repo on machine "machine-x", but failed to replace local "origin" in /workspace/example-repo.',
+      'Created ugit repository /srv/ugit/.data/repos/canonical-repo on machine "machine-x", but failed to replace local "origin" in /workspace/example-repo.',
     );
     expect(error.message).toContain(
-      "The remote repository now exists at /srv/ugit/.data/repos/example-repo",
+      "The remote repository now exists at /srv/ugit/.data/repos/canonical-repo",
     );
     expect(error.message).toContain(
-      "git -C /workspace/example-repo remote set-url origin ssh://kamiya-machine-x/srv/ugit/.data/repos/example-repo",
+      "git -C /workspace/example-repo remote set-url origin ssh://kamiya-machine-x/srv/ugit/.data/repos/canonical-repo",
     );
     expect(error.message).toContain(
       "git -C /workspace/example-repo config --local ugit.machine machine-x",
@@ -469,11 +513,13 @@ describe("createRepository", () => {
 
   it("describes manual recovery when recording the machine fails after replacing origin", () => {
     const repositoryPath = "/workspace/example-repo";
+    const repositoryName = "canonical-repo";
 
     const error = captureThrownError(() =>
       createRepository({
         config: createRemoteConfig("/srv/ugit"),
         machineName: "machine-x",
+        repositoryName,
         directory: repositoryPath,
         cwd: "/",
         pathExists: () => true,
@@ -518,7 +564,7 @@ describe("createRepository", () => {
 
               if (
                 remoteCommand.includes("test") &&
-                remoteCommand.includes("/srv/ugit/.data/repos/example-repo")
+                remoteCommand.includes("/srv/ugit/.data/repos/canonical-repo")
               ) {
                 throw createExecError("", 1);
               }
@@ -553,10 +599,10 @@ describe("createRepository", () => {
     );
 
     expect(error.message).toContain(
-      'Created ugit repository /srv/ugit/.data/repos/example-repo on machine "machine-x" and updated local "origin", but failed to record machine "machine-x" in /workspace/example-repo.',
+      'Created ugit repository /srv/ugit/.data/repos/canonical-repo on machine "machine-x" and updated local "origin", but failed to record machine "machine-x" in /workspace/example-repo.',
     );
     expect(error.message).toContain(
-      "The remote repository now exists at /srv/ugit/.data/repos/example-repo",
+      "The remote repository now exists at /srv/ugit/.data/repos/canonical-repo",
     );
     expect(error.message).toContain(
       "git -C /workspace/example-repo config --local ugit.machine machine-x",
@@ -564,14 +610,16 @@ describe("createRepository", () => {
     expect(error.message).not.toContain("remote set-url origin");
   });
 
-  it("quotes space-containing paths in manual recovery commands", () => {
-    const repositoryPath = "/workspace/team repo";
+  it("quotes space-containing remote repository names in manual recovery commands", () => {
+    const repositoryPath = "/workspace/local-copy";
+    const repositoryName = "team repo";
     const remoteRepositoryPath = "/srv/ugit root/.data/repos/team repo";
 
     const error = captureThrownError(() =>
       createRepository({
         config: createLocalConfig("/srv/ugit root"),
         machineName: "local",
+        repositoryName,
         directory: repositoryPath,
         cwd: "/",
         createDirectory: () => {},
@@ -670,16 +718,17 @@ describe("createRepository", () => {
     );
 
     expect(error.message).toContain(
-      "git -C '/workspace/team repo' remote set-url origin '/srv/ugit root/.data/repos/team repo'",
+      "git -C /workspace/local-copy remote set-url origin '/srv/ugit root/.data/repos/team repo'",
     );
     expect(error.message).toContain(
-      "git -C '/workspace/team repo' config --local ugit.machine local",
+      "git -C /workspace/local-copy config --local ugit.machine local",
     );
   });
 
   it("passes the full ssh setup payload to remote sh -lc as one argument", () => {
     const repositoryPath = createGitRepository();
     const machineRoot = createWorkspace();
+    const repositoryName = "canonical-repo";
     const upstreamUrl = "https://github.com/example/upstream.git";
 
     git(repositoryPath, ["remote", "add", "upstream", upstreamUrl]);
@@ -687,16 +736,17 @@ describe("createRepository", () => {
     const result = createRepository({
       config: createRemoteConfig(machineRoot),
       machineName: "machine-x",
+      repositoryName,
       directory: repositoryPath,
       runCommand: runCommandWithLocalSsh,
     });
 
     expect(result).toEqual({
       machineName: "machine-x",
-      repositoryName: path.basename(repositoryPath),
+      repositoryName,
       repositoryPath,
-      remoteRepositoryPath: path.join(machineRoot, ".data", "repos", path.basename(repositoryPath)),
-      originUrl: `ssh://kamiya-machine-x${path.join(machineRoot, ".data", "repos", path.basename(repositoryPath))}`,
+      remoteRepositoryPath: path.join(machineRoot, ".data", "repos", repositoryName),
+      originUrl: `ssh://kamiya-machine-x${path.join(machineRoot, ".data", "repos", repositoryName)}`,
     });
     expect(git(repositoryPath, ["remote", "get-url", "origin"])).toBe(result.originUrl);
     expect(git(repositoryPath, ["config", "--local", "--get", "ugit.machine"])).toBe("machine-x");
@@ -705,6 +755,26 @@ describe("createRepository", () => {
     expect(
       git(result.remoteRepositoryPath, ["config", "--local", "--get", "receive.denyCurrentBranch"]),
     ).toBe("updateInstead");
+  });
+
+  it("inspects origin conflicts using the explicit remote repository name", () => {
+    const repositoryPath = createGitRepository();
+
+    git(repositoryPath, ["remote", "add", "upstream", "https://github.com/example/upstream.git"]);
+    git(repositoryPath, ["remote", "add", "origin", "ssh://elsewhere/example.git"]);
+
+    expect(
+      inspectCreateRepositoryOriginConflict({
+        config: createRemoteConfig("/srv/ugit"),
+        machineName: "machine-x",
+        repositoryName: "canonical-repo",
+        directory: repositoryPath,
+      }),
+    ).toEqual({
+      repositoryPath,
+      existingOriginUrl: "ssh://elsewhere/example.git",
+      originUrl: "ssh://kamiya-machine-x/srv/ugit/.data/repos/canonical-repo",
+    });
   });
 });
 
