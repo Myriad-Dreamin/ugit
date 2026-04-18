@@ -238,6 +238,42 @@ describe("RepositoryWorkflowsPage", () => {
       },
     );
   });
+
+  it("falls back to the request host when the forwarded host is malformed", async () => {
+    mockedIsConfiguredOwner.mockReturnValue(true);
+    mockedGetRepositoryByName.mockReturnValue({
+      name: "example-repo",
+      path: "/tmp/example-repo",
+      relativePath: ".data/repos/example-repo",
+    });
+    mockedHeadersReader.mockResolvedValue(
+      new Headers({
+        host: "ugit.example.test",
+        "x-forwarded-host": "[",
+        "x-forwarded-proto": "https",
+      }),
+    );
+    mockedFetch.mockResolvedValue(
+      Response.json({
+        repositoryName: "example-repo",
+        workflowRuns: [],
+      }),
+    );
+
+    await RepositoryWorkflowsPage({
+      params: {
+        user: "Myriad-Dreamin",
+        repo: "example-repo",
+      },
+    });
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "https://ugit.example.test/api/workflows/runs?repositoryName=example-repo",
+      {
+        cache: "no-store",
+      },
+    );
+  });
 });
 
 type ElementWithChildren = ReactElement<Record<string, unknown> & { children?: unknown }>;

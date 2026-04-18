@@ -16,8 +16,7 @@ export async function buildWorkflowRunsBootstrapUrl(repositoryName: string): Pro
 }
 
 function resolveRequestOrigin(requestHeaders: HeaderReader): string {
-  const host =
-    readLastHeaderValue(requestHeaders, "x-forwarded-host") ?? readHostHeaderValue(requestHeaders);
+  const host = resolveHost(requestHeaders);
 
   if (!host) {
     return DEFAULT_WORKFLOW_BOOTSTRAP_ORIGIN;
@@ -33,10 +32,41 @@ function resolveRequestOrigin(requestHeaders: HeaderReader): string {
   }
 }
 
+function resolveHost(requestHeaders: HeaderReader): string | null {
+  return (
+    normalizeHost(readLastHeaderValue(requestHeaders, "x-forwarded-host")) ??
+    normalizeHost(readHostHeaderValue(requestHeaders))
+  );
+}
+
 function readHostHeaderValue(requestHeaders: HeaderReader): string | null {
   const value = requestHeaders.get("host");
 
   return value?.trim() || null;
+}
+
+function normalizeHost(host: string | null): string | null {
+  if (!host) {
+    return null;
+  }
+
+  try {
+    const normalizedUrl = new URL(`http://${host}`);
+
+    if (
+      normalizedUrl.username ||
+      normalizedUrl.password ||
+      normalizedUrl.pathname !== "/" ||
+      normalizedUrl.search ||
+      normalizedUrl.hash
+    ) {
+      return null;
+    }
+
+    return normalizedUrl.host;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeProtocol(protocol: string | null): string | null {
