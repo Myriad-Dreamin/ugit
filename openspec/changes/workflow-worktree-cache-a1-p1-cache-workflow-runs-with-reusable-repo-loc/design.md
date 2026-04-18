@@ -82,10 +82,14 @@ log-streaming, and CLI or API contracts unchanged.
   Rationale: crashes or manual deletion can leave `.git/worktrees/*` metadata or
   the `workflow1` path stale. The helper should validate ownership, prune stale
   metadata, and recreate the worktree only when the normal reset path cannot
-  succeed.
+  succeed. If `workflow1` is occupied by ordinary repository content instead of
+  a linked worktree, the runner must fail safely instead of deleting files that
+  belong to the mirrored repository.
   Alternative considered: fail the workflow run when the managed path is broken.
   Rejected because stale metadata is operational residue, not a user-facing
-  workflow error, and the runner can repair it deterministically.
+  workflow error, and the runner can repair it deterministically. Automatic
+  repair is still rejected for non-worktree content because it risks deleting
+  legitimate repository files.
 
 - Preserve the current external contracts and document the split execution
   model.
@@ -112,7 +116,9 @@ log-streaming, and CLI or API contracts unchanged.
   path, and cover the residue policy with focused tests.
 - [Nested repo-local worktree state can drift] -> Validate that `workflow1`
   belongs to the expected repository, prune stale metadata, and recreate the
-  worktree during explicit recovery paths.
+  worktree during explicit recovery paths. If the slot contains ordinary
+  repository content instead of a linked worktree, stop and surface a workflow
+  failure instead of deleting the collision automatically.
 - [Shared helper refactors could regress PR CI teardown] -> Keep CI on its
   existing ephemeral lifecycle and add tests that still expect detached worktree
   removal for CI jobs.

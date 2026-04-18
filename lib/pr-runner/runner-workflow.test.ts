@@ -46,6 +46,46 @@ afterEach(() => {
 });
 
 describe("executeWorkflowRunJob", () => {
+  it("fails safely when workflow1 already contains repository content", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createGitRepository(workspace, "alpha");
+
+    commitRepositoryFile(
+      repositoryPath,
+      "workflow1/project-file.txt",
+      "tracked\n",
+      "add workflow1",
+    );
+
+    const commitHash = readGitOutput(repositoryPath, "rev-parse", "HEAD");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const runCommand = vi.fn(runAsyncCommand);
+    const queued = queueWorkflowRun(createWorkflowRequest(repositoryPath, commitHash, "lint"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+    });
+    const execution = claimWorkflowRun(storage, "2026-04-14T00:00:10.000Z");
+    const contentPath = path.join(repositoryPath, "workflow1", "project-file.txt");
+
+    await executeWorkflowRunJob(execution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      runCommand,
+    });
+
+    expect(executeWorkflowPackages).not.toHaveBeenCalled();
+    expect(readFileSync(contentPath, "utf8")).toBe("tracked\n");
+    expect(readWorkflowRun("workflow-1", storage)).toMatchObject({
+      id: "workflow-1",
+      status: "failed",
+      errorMessage: expect.stringContaining("Refusing to remove"),
+    });
+    expect(readFileSync(queued.workflowRun.logPath, "utf8")).toContain("Refusing to remove");
+    expect(listWorktreeRemovals(runCommand)).toHaveLength(0);
+  });
+
   it("creates and reuses the managed workflow worktree without normal cleanup", async () => {
     const workspace = createWorkspace();
     const repositoryPath = createGitRepository(workspace, "alpha");
@@ -256,6 +296,24 @@ function createGitRepository(workspace: string, repositoryName: string): string 
   });
 
   return repositoryPath;
+}
+
+function commitRepositoryFile(
+  repositoryPath: string,
+  relativePath: string,
+  contents: string,
+  message: string,
+): void {
+  const filePath = path.join(repositoryPath, relativePath);
+
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, contents, "utf8");
+  execFileSync("git", ["-C", repositoryPath, "add", relativePath], {
+    stdio: "ignore",
+  });
+  execFileSync("git", ["-C", repositoryPath, "commit", "-q", "-m", message], {
+    stdio: "ignore",
+  });
 }
 
 function claimWorkflowRun(storage: string, timestamp: string) {

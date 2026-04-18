@@ -16,7 +16,12 @@ const MANAGED_WORKFLOW_WORKTREE_NAME = "workflow1";
 
 type PreparationResult =
   | Readonly<{ ok: true; worktreePath: string }>
-  | Readonly<{ ok: false; errorMessage: string }>;
+  | Readonly<{ ok: false; errorMessage: string; recoverable: boolean }>;
+
+type ManagedWorkflowWorktreeState =
+  | Readonly<{ kind: "managed" }>
+  | Readonly<{ kind: "recoverable"; errorMessage: string }>
+  | Readonly<{ kind: "blocked"; errorMessage: string }>;
 
 export function getManagedWorkflowWorktreePath(repositoryPath: string): string {
   return path.join(repositoryPath, MANAGED_WORKFLOW_WORKTREE_NAME);
@@ -74,6 +79,10 @@ export async function prepareManagedWorkflowWorktree(
     return initialResult.worktreePath;
   }
 
+  if (!initialResult.recoverable) {
+    throw new Error(initialResult.errorMessage);
+  }
+
   await recoverManagedWorkflowWorktree(job.repositoryPath, worktreePath, runCommand);
 
   const recoveryResult = await tryPrepareManagedWorkflowWorktree(job, worktreePath, runCommand);
@@ -91,20 +100,21 @@ async function tryPrepareManagedWorkflowWorktree(
   runCommand: AsyncCommandRunner,
 ): Promise<PreparationResult> {
   if (existsSync(worktreePath)) {
-    if (
-      !(await managedWorkflowWorktreeMatchesRepository(
-        job.repositoryPath,
-        worktreePath,
-        runCommand,
-      ))
-    ) {
-      return {
-        ok: false,
-        errorMessage: `Managed workflow worktree ${worktreePath} does not belong to ${job.repositoryPath}.`,
-      };
+    const worktreeState = await inspectManagedWorkflowWorktree(
+      job.repositoryPath,
+      worktreePath,
+      runCommand,
+    );
+
+    if (worktreeState.kind === "managed") {
+      return await resetManagedWorkflowWorktree(worktreePath, job.commitHash, runCommand);
     }
 
-    return await resetManagedWorkflowWorktree(worktreePath, job.commitHash, runCommand);
+    return {
+      ok: false,
+      errorMessage: worktreeState.errorMessage,
+      recoverable: worktreeState.kind === "recoverable",
+    };
   }
 
   return await createManagedWorkflowWorktree(job, worktreePath, runCommand);
@@ -128,6 +138,7 @@ async function createManagedWorkflowWorktree(
   if (addWorktreeResult.exitCode !== 0) {
     return {
       ok: false,
+      recoverable: true,
       errorMessage:
         combineCommandOutput(addWorktreeResult) ||
         `Failed to create managed workflow worktree ${worktreePath}.`,
@@ -157,6 +168,7 @@ async function resetManagedWorkflowWorktree(
   if (checkoutResult.exitCode !== 0) {
     return {
       ok: false,
+      recoverable: true,
       errorMessage:
         combineCommandOutput(checkoutResult) ||
         `Failed to detach managed workflow worktree ${worktreePath} at ${commitHash}.`,
@@ -168,6 +180,7 @@ async function resetManagedWorkflowWorktree(
   if (resetResult.exitCode !== 0) {
     return {
       ok: false,
+      recoverable: true,
       errorMessage:
         combineCommandOutput(resetResult) ||
         `Failed to reset managed workflow worktree ${worktreePath} to ${commitHash}.`,
@@ -180,11 +193,11 @@ async function resetManagedWorkflowWorktree(
   };
 }
 
-async function managedWorkflowWorktreeMatchesRepository(
+async function inspectManagedWorkflowWorktree(
   repositoryPath: string,
   worktreePath: string,
   runCommand: AsyncCommandRunner,
-): Promise<boolean> {
+): Promise<ManagedWorkflowWorktreeState> {
   const topLevelResult = await runCommand("git", [
     "-C",
     worktreePath,
@@ -193,7 +206,19 @@ async function managedWorkflowWorktreeMatchesRepository(
   ]);
 
   if (topLevelResult.exitCode !== 0) {
-    return false;
+    if (existsSync(path.join(worktreePath, ".git"))) {
+      return {
+        kind: "recoverable",
+        errorMessage: `Managed workflow worktree ${worktreePath} has stale or missing linked-worktree metadata.`,
+      };
+    }
+
+    return {
+      kind: "blocked",
+      errorMessage:
+        `Managed workflow worktree path ${worktreePath} is occupied by non-worktree content. ` +
+        "Refusing to remove it automatically.",
+    };
   }
 
   const commonDirResult = await runCommand("git", [
@@ -204,16 +229,37 @@ async function managedWorkflowWorktreeMatchesRepository(
   ]);
 
   if (commonDirResult.exitCode !== 0) {
-    return false;
+    return {
+      kind: "recoverable",
+      errorMessage: `Managed workflow worktree ${worktreePath} has stale or missing linked-worktree metadata.`,
+    };
   }
 
   const resolvedTopLevel = resolveGitPath(worktreePath, topLevelResult.stdout);
   const resolvedCommonDir = resolveGitPath(worktreePath, commonDirResult.stdout);
 
-  return (
+  if (
     resolvedTopLevel === path.resolve(worktreePath) &&
     resolvedCommonDir === path.resolve(repositoryPath, ".git")
-  );
+  ) {
+    return {
+      kind: "managed",
+    };
+  }
+
+  if (resolvedCommonDir === path.resolve(repositoryPath, ".git")) {
+    return {
+      kind: "blocked",
+      errorMessage:
+        `Managed workflow worktree path ${worktreePath} resolves inside ${repositoryPath} but is not a linked worktree. ` +
+        "Refusing to remove repository content automatically.",
+    };
+  }
+
+  return {
+    kind: "recoverable",
+    errorMessage: `Managed workflow worktree ${worktreePath} does not belong to ${repositoryPath}.`,
+  };
 }
 
 async function recoverManagedWorkflowWorktree(

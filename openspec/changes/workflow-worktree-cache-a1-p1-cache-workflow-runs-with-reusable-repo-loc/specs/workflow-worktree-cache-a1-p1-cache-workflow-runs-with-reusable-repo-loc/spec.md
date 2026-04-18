@@ -58,6 +58,14 @@ SHALL recover by pruning or recreating it before running the queued workflow.
 - **THEN** the runner SHALL discard that broken managed worktree state and
   recreate it for the expected repository before execution
 
+#### Scenario: Ordinary repository content blocks destructive recovery
+- **WHEN** the configured `workflow1` path contains normal repository content
+  instead of a linked worktree
+- **THEN** the runner SHALL fail the workflow run before deleting or replacing
+  that content
+- **AND** the runner SHALL leave the colliding repository content untouched for
+  manual repair
+
 ### Requirement: Pull-request CI keeps ephemeral detached worktrees
 The system SHALL keep pull-request CI jobs on temporary detached git worktrees
 that are removed after each run, and SHALL not route CI execution through the
