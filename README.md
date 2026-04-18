@@ -10,7 +10,7 @@ This repository now ships the first end-to-end CLI and server slice:
 ugit pr list [-m <machine>] [--state <open|merged|all>] [--base <branch>] [--head <branch>] [directory]
 ugit pr create [-m <machine>] --base <branch> --title <title> [--body <text>] [--draft] [directory]
 ugit pr edit [-m <machine>] [--base <branch>] [--title <title>] [--body <text>] [--draft|--ready] [directory]
-ugit workflow run [-m <machine>] [-p <local-port>] <workflow> [directory]
+ugit workflow run [--local] [-m <machine>] [-p <local-port>] <workflow> [directory]
 ugit workflow logs [-m <machine>] [-p <local-port>] <workflowId> [directory]
 ugit create -m <machine> --name <remote-repo-name> [--override-origin] [directory]
 ugit serve [-m <machine>] [-p <local-port>] [directory]
@@ -29,9 +29,9 @@ ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--d
 
 `ugit pr sync` is the lower-level republish and rerun command for branches that already have a pull request and need CI rerun after additional commits.
 
-`ugit workflow run` pushes the current branch to the ugit `origin`, queues one named workflow against that commit, and prints the workflow ID plus queue position.
+`ugit workflow run` defaults to pushing the current branch to the ugit `origin`, queueing one named remote workflow against that commit, and printing the workflow ID plus queue position. Pass `--local` to run the named workflow package directly against the current repository working tree in the foreground for debugging.
 
-`ugit workflow logs` streams a manual workflow run's append-only server logs over HTTP-over-SSH until the run finishes.
+`ugit workflow logs` streams a remote manual workflow run's append-only server logs over HTTP-over-SSH until the run finishes. Local `--local` runs do not create a `workflowId` and cannot be tailed with `ugit workflow logs`.
 
 ## Codex skills
 
@@ -153,6 +153,8 @@ Commands that operate on an existing ugit-backed repository can infer the target
 
 Pass `-m, --machine` to override the inferred machine.
 
+`ugit workflow run --local` is the exception: it resolves only the repository root, does not read `ugit.machine`, and rejects `-m, --machine` plus `-p, --port`.
+
 ## What `ugit serve` does
 
 For `ugit serve [-m <machine>] [-p <local-port>] [directory]`, the CLI:
@@ -169,9 +171,10 @@ For `ugit serve [-m <machine>] [-p <local-port>] [directory]`, the CLI:
 
 ## Workflow command boundaries
 
-- Use `ugit workflow run` to queue one named workflow without creating or mutating a pull request.
-- Use `ugit workflow logs` to watch the server-side log stream for a specific `workflowId`.
-- Manual workflow runs share the same queue capacity as pull-request CI jobs, but they never auto-merge.
+- Use `ugit workflow run <workflow>` to queue one named remote workflow without creating or mutating a pull request.
+- Use `ugit workflow run --local <workflow>` to debug one workflow package in place against your current working tree. Local runs may reuse or mutate dependency state under `.ugit/workflows/<workflow>/`.
+- Use `ugit workflow logs` only for remote queued runs that returned a `workflowId`.
+- Remote manual workflow runs share the same queue capacity as pull-request CI jobs, but they never auto-merge.
 
 ## What `ugit pr list` does
 
@@ -215,13 +218,22 @@ For `ugit pr sync --base <branch> --title <title> [--body <text>] [directory]`, 
 
 ## What `ugit workflow run` does
 
-For `ugit workflow run [-p <local-port>] <workflow> [directory]`, the CLI:
+For `ugit workflow run <workflow> [directory]` without `--local`, the CLI:
 
 - resolves the repository root and target machine
 - pushes the current branch HEAD to the ugit `origin` before queueing the run
 - publishes the branch using the shared `GitPlatformPublishedBranch` contract
 - queues one named workflow run over HTTP-over-SSH and prints the workflow ID plus queue position
 - reuses the same one-per-repository and four-global runner limits as pull-request CI
+
+For `ugit workflow run --local <workflow> [directory]`, the CLI:
+
+- resolves only the repository root and rejects `-m, --machine` plus `-p, --port`
+- validates the requested `.ugit/workflows/<workflow>/package.json` plus `ugit:ci` script locally before starting
+- runs `pnpm install --dir <workflow> --ignore-workspace --no-frozen-lockfile`
+- then runs `pnpm --dir <workflow> run ugit:ci` directly against the current repository working tree with stdout and stderr attached to your terminal
+- exits with the local child-process result instead of queueing a remote run, creating a `workflowId`, or producing `ugit workflow logs`
+- may reuse or mutate workflow dependency caches under `.ugit/workflows/<workflow>/`
 
 ## What `ugit workflow logs` does
 
@@ -230,6 +242,7 @@ For `ugit workflow logs [-p <local-port>] <workflowId> [directory]`, the CLI:
 - resolves the target machine from `-m` or the repository's `ugit.machine` when available
 - streams live workflow-run logs over HTTP-over-SSH instead of tailing remote files directly
 - follows appended log output until the workflow run reaches a terminal status
+- applies only to remote queued workflow runs that have a `workflowId`
 
 ## Server-side runner contract
 
