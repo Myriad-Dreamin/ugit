@@ -3,8 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const NEXT_NOT_FOUND_ERROR = "NEXT_NOT_FOUND";
 
-const { mockedWorkflowRunsListClient } = vi.hoisted(() => ({
+const { mockedHeaders, mockedWorkflowRunsListClient } = vi.hoisted(() => ({
+  mockedHeaders: vi.fn(),
   mockedWorkflowRunsListClient: vi.fn(() => null),
+}));
+
+vi.mock("next/headers", () => ({
+  headers: mockedHeaders,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -26,9 +31,9 @@ vi.mock("@/lib/repositories", () => ({
   getRepositoryByName: vi.fn(),
 }));
 
-vi.mock("@/lib/workflow-runs/service", () => ({
-  listWorkflowRuns: vi.fn(),
-}));
+vi.mock("@/lib/workflow-runs/service", () => {
+  throw new Error("RepositoryWorkflowsPage must not import workflow services directly.");
+});
 
 vi.mock("@/app/[user]/[repo]/workflows/workflow-runs-list-client", () => ({
   WorkflowRunsListClient: mockedWorkflowRunsListClient,
@@ -37,7 +42,6 @@ vi.mock("@/app/[user]/[repo]/workflows/workflow-runs-list-client", () => ({
 import RepositoryWorkflowsPage from "@/app/[user]/[repo]/workflows/page";
 import { getRepositoryHref, getRepositoryWorkflowsHref, isConfiguredOwner } from "@/lib/owner";
 import { getRepositoryByName } from "@/lib/repositories";
-import { listWorkflowRuns } from "@/lib/workflow-runs/service";
 import { notFound } from "next/navigation";
 
 const mockedNotFound = vi.mocked(notFound);
@@ -45,7 +49,10 @@ const mockedGetRepositoryByName = vi.mocked(getRepositoryByName);
 const mockedGetRepositoryHref = vi.mocked(getRepositoryHref);
 const mockedGetRepositoryWorkflowsHref = vi.mocked(getRepositoryWorkflowsHref);
 const mockedIsConfiguredOwner = vi.mocked(isConfiguredOwner);
-const mockedListWorkflowRuns = vi.mocked(listWorkflowRuns);
+const mockedHeadersReader = vi.mocked(mockedHeaders);
+const mockedFetch = vi.fn<typeof fetch>();
+
+vi.stubGlobal("fetch", mockedFetch);
 
 describe("RepositoryWorkflowsPage", () => {
   beforeEach(() => {
@@ -65,7 +72,13 @@ describe("RepositoryWorkflowsPage", () => {
       return `/Myriad-Dreamin/${repositoryName}/workflows`;
     });
     mockedIsConfiguredOwner.mockReset();
-    mockedListWorkflowRuns.mockReset();
+    mockedHeadersReader.mockReset();
+    mockedHeadersReader.mockResolvedValue(
+      new Headers({
+        host: "localhost",
+      }),
+    );
+    mockedFetch.mockReset();
   });
 
   it("calls notFound for unsupported users", async () => {
@@ -82,6 +95,8 @@ describe("RepositoryWorkflowsPage", () => {
 
     expect(mockedNotFound).toHaveBeenCalledTimes(1);
     expect(mockedGetRepositoryByName).not.toHaveBeenCalled();
+    expect(mockedHeadersReader).not.toHaveBeenCalled();
+    expect(mockedFetch).not.toHaveBeenCalled();
   });
 
   it("calls notFound when the repository does not exist", async () => {
@@ -99,6 +114,47 @@ describe("RepositoryWorkflowsPage", () => {
 
     expect(mockedGetRepositoryByName).toHaveBeenCalledWith("missing-repo");
     expect(mockedNotFound).toHaveBeenCalledTimes(1);
+    expect(mockedHeadersReader).not.toHaveBeenCalled();
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+
+  it("calls notFound when the runs API returns a repo-scoped 404", async () => {
+    mockedIsConfiguredOwner.mockReturnValue(true);
+    mockedGetRepositoryByName.mockReturnValue({
+      name: "example-repo",
+      path: "/tmp/example-repo",
+      relativePath: ".data/repos/example-repo",
+    });
+    mockedHeadersReader.mockResolvedValue(
+      new Headers({
+        host: "localhost:3000",
+      }),
+    );
+    mockedFetch.mockResolvedValue(
+      Response.json(
+        {
+          error: "ugit repository example-repo does not exist on the server.",
+        },
+        { status: 404 },
+      ),
+    );
+
+    await expect(
+      RepositoryWorkflowsPage({
+        params: {
+          user: "Myriad-Dreamin",
+          repo: "example-repo",
+        },
+      }),
+    ).rejects.toThrowError(NEXT_NOT_FOUND_ERROR);
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "http://localhost:3000/api/workflows/runs?repositoryName=example-repo",
+      {
+        cache: "no-store",
+      },
+    );
+    expect(mockedNotFound).toHaveBeenCalledTimes(1);
   });
 
   it("wires the repository workflow summaries into the live client component", async () => {
@@ -111,10 +167,18 @@ describe("RepositoryWorkflowsPage", () => {
     };
 
     mockedGetRepositoryByName.mockReturnValue(repository);
-    mockedListWorkflowRuns.mockReturnValue({
-      repositoryName: "example-repo",
-      workflowRuns: [],
-    });
+    mockedHeadersReader.mockResolvedValue(
+      new Headers({
+        "x-forwarded-host": "ugit.example.test",
+        "x-forwarded-proto": "https",
+      }),
+    );
+    mockedFetch.mockResolvedValue(
+      Response.json({
+        repositoryName: "example-repo",
+        workflowRuns: [],
+      }),
+    );
 
     const page = await RepositoryWorkflowsPage({
       params: {
@@ -127,9 +191,12 @@ describe("RepositoryWorkflowsPage", () => {
     expect(page).toMatchObject({
       type: "main",
     });
-    expect(mockedListWorkflowRuns).toHaveBeenCalledWith({
-      repositoryName: "example-repo",
-    });
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "https://ugit.example.test/api/workflows/runs?repositoryName=example-repo",
+      {
+        cache: "no-store",
+      },
+    );
     expect(workflowRunsClient?.props).toMatchObject({
       initialWorkflowRuns: [],
       repositoryName: "example-repo",
