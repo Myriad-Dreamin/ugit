@@ -16,10 +16,10 @@ import { createCli } from "../cli";
 
 const createResult = {
   machineName: "machine-x",
-  repositoryName: "alpha",
+  repositoryName: "canonical-repo",
   repositoryPath: "/work/alpha",
-  remoteRepositoryPath: "/srv/ugit/.data/repos/alpha",
-  originUrl: "ssh://machine-x/srv/ugit/.data/repos/alpha",
+  remoteRepositoryPath: "/srv/ugit/.data/repos/canonical-repo",
+  originUrl: "ssh://machine-x/srv/ugit/.data/repos/canonical-repo",
 };
 
 const originConflict = {
@@ -36,32 +36,53 @@ beforeEach(() => {
 });
 
 describe("create command", () => {
+  it("requires --name before running the create flow", async () => {
+    const { exitCode, stdout, stderr } = await runCli(["create", "-m", "machine-x"]);
+
+    expect(exitCode).toBe(1);
+    expect(mockedInspectCreateRepositoryOriginConflict).not.toHaveBeenCalled();
+    expect(mockedCreateRepository).not.toHaveBeenCalled();
+    expect(`${stdout}${stderr}`).toContain("--name");
+  });
+
   it("prompts before replacing a conflicting origin and continues when approved", async () => {
     mockedInspectCreateRepositoryOriginConflict.mockReturnValue(originConflict);
 
-    const { exitCode, stdout, stderr } = await runCli(["create", "-m", "machine-x"], {
-      interactive: true,
-      stdinText: "yes\n",
-    });
+    const { exitCode, stdout, stderr } = await runCli(
+      ["create", "-m", "machine-x", "--name", "canonical-repo"],
+      {
+        interactive: true,
+        stdinText: "yes\n",
+      },
+    );
 
     expect(exitCode).toBe(0);
+    expect(mockedInspectCreateRepositoryOriginConflict).toHaveBeenCalledWith({
+      machineName: "machine-x",
+      repositoryName: "canonical-repo",
+      directory: undefined,
+    });
     expect(mockedCreateRepository).toHaveBeenCalledWith({
       machineName: "machine-x",
+      repositoryName: "canonical-repo",
       directory: undefined,
       originConflictResolution: "replace",
     });
     expect(stdout).toContain(`Local "origin" points to ${originConflict.existingOriginUrl}.`);
-    expect(stdout).toContain("Created ugit repository alpha on machine machine-x.");
+    expect(stdout).toContain("Created ugit repository canonical-repo on machine machine-x.");
     expect(stderr).toBe("");
   });
 
   it("aborts cleanly when the user declines origin replacement", async () => {
     mockedInspectCreateRepositoryOriginConflict.mockReturnValue(originConflict);
 
-    const { exitCode, stderr } = await runCli(["create", "-m", "machine-x"], {
-      interactive: true,
-      stdinText: "n\n",
-    });
+    const { exitCode, stderr } = await runCli(
+      ["create", "-m", "machine-x", "--name", "canonical-repo"],
+      {
+        interactive: true,
+        stdinText: "n\n",
+      },
+    );
 
     expect(exitCode).toBe(1);
     expect(mockedCreateRepository).not.toHaveBeenCalled();
@@ -77,12 +98,15 @@ describe("create command", () => {
       "create",
       "-m",
       "machine-x",
+      "--name",
+      "canonical-repo",
       "--override-origin",
     ]);
 
     expect(exitCode).toBe(0);
     expect(mockedCreateRepository).toHaveBeenCalledWith({
       machineName: "machine-x",
+      repositoryName: "canonical-repo",
       directory: undefined,
       originConflictResolution: "replace",
     });
@@ -93,7 +117,13 @@ describe("create command", () => {
   it("fails with guidance when non-interactive runs omit --override-origin", async () => {
     mockedInspectCreateRepositoryOriginConflict.mockReturnValue(originConflict);
 
-    const { exitCode, stderr } = await runCli(["create", "-m", "machine-x"]);
+    const { exitCode, stderr } = await runCli([
+      "create",
+      "-m",
+      "machine-x",
+      "--name",
+      "canonical-repo",
+    ]);
 
     expect(exitCode).toBe(1);
     expect(mockedCreateRepository).not.toHaveBeenCalled();
@@ -103,10 +133,12 @@ describe("create command", () => {
     expect(stderr).toContain("--override-origin");
   });
 
-  it("documents the override flag in create help output", async () => {
+  it("documents the required name and override flag in create help output", async () => {
     const { exitCode, stdout } = await runCli(["create", "--help"]);
 
     expect(exitCode).toBe(0);
+    expect(stdout).toContain("--name");
+    expect(stdout).toContain("canonical-repo");
     expect(stdout).toContain("--override-origin");
     expect(stdout).toContain("Required in non-interactive runs.");
   });

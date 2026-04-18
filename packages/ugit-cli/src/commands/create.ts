@@ -16,22 +16,31 @@ export class CreateCommand extends Command {
     category: "Repository",
     description: "Create a ugit-backed repository on a configured machine.",
     details:
-      "Initializes a working-tree Git repository on the selected ugit machine, copies the local upstream remote there, records the machine in local Git config, and prompts before replacing a conflicting local origin. Use --override-origin to approve that replacement without prompting in scripts or other non-interactive runs.",
+      "Initializes a working-tree Git repository on the selected ugit machine using the required --name value for the remote repository, copies the local upstream remote there, records the machine in local Git config, and prompts before replacing a conflicting local origin. Use --override-origin to approve that replacement without prompting in scripts or other non-interactive runs.",
     examples: [
-      ["Create a ugit repository in the current directory", "ugit create -m machine-x"],
+      [
+        "Create a ugit repository in the current directory",
+        "ugit create -m machine-x --name canonical-repo",
+      ],
       [
         "Create a ugit repository for another local checkout",
-        "ugit create -m local ../example-repo",
+        "ugit create -m local --name canonical-repo ../example-repo",
       ],
       [
         "Create non-interactively when a conflicting local origin should be replaced",
-        "ugit create -m machine-x --override-origin",
+        "ugit create -m machine-x --name canonical-repo --override-origin",
       ],
     ],
   });
 
   machine = Option.String("-m,--machine", {
     description: "Configured ugit machine name.",
+    required: true,
+  });
+
+  repositoryName = Option.String("--name", {
+    description:
+      'Remote repository name to create on the selected machine. Must be one safe path segment (not empty, "." or "..", and without path separators).',
     required: true,
   });
 
@@ -48,6 +57,7 @@ export class CreateCommand extends Command {
   async execute(): Promise<number> {
     const originConflict = inspectCreateRepositoryOriginConflict({
       machineName: this.machine,
+      repositoryName: this.repositoryName,
       directory: this.directory,
     });
     let originConflictResolution: CreateRepositoryOriginConflictResolution = this.overrideOrigin
@@ -78,6 +88,7 @@ export class CreateCommand extends Command {
 
     const result = createRepository({
       machineName: this.machine,
+      repositoryName: this.repositoryName,
       directory: this.directory,
       originConflictResolution,
     });

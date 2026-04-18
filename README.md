@@ -12,12 +12,12 @@ ugit pr create [-m <machine>] --base <branch> --title <title> [--body <text>] [-
 ugit pr edit [-m <machine>] [--base <branch>] [--title <title>] [--body <text>] [--draft|--ready] [directory]
 ugit workflow run [-m <machine>] [-p <local-port>] <workflow> [directory]
 ugit workflow logs [-m <machine>] [-p <local-port>] <workflowId> [directory]
-ugit create -m <machine> [--override-origin] [directory]
+ugit create -m <machine> --name <remote-repo-name> [--override-origin] [directory]
 ugit serve [-m <machine>] [-p <local-port>] [directory]
 ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--draft] [directory]
 ```
 
-`ugit create` bootstraps a repository on a configured ugit machine and records the selected machine in local Git config for future ugit commands.
+`ugit create` bootstraps a repository on a configured ugit machine with an explicit remote repository name and records the selected machine in local Git config for future ugit commands.
 
 `ugit serve` opens an SSH local-port forward to the machine's Next.js server. For local machines, it short-circuits and prints the direct URL.
 
@@ -117,16 +117,22 @@ Machines named `local` or `localhost`, or machines whose `ssh-machine` is `local
 
 ## What `ugit create` does
 
-For `ugit create -m <machine> [--override-origin] [directory]`, the CLI:
+For `ugit create -m <machine> --name <remote-repo-name> [--override-origin] [directory]`, the CLI:
 
 - verifies the target directory is a local Git repository root
 - requires a local `upstream` remote
-- derives the ugit repository name from the directory name
-- creates the remote working-tree repository at `<machine.path>/.data/repos/<repo-name>`
+- requires `--name` to provide the remote repository identity explicitly
+- rejects remote names that are empty, `.` or `..`, or contain `/` or `\`
+- creates the remote working-tree repository at `<machine.path>/.data/repos/<remote-repo-name>`
 - configures the remote repository's `upstream` remote
 - prompts before replacing a conflicting local `origin` remote during interactive runs
 - configures or updates the local repository's `origin` remote
 - records the chosen machine in local Git config under `ugit.machine`
+
+`--name` controls the remote ugit repository name. The optional `[directory]`
+still selects which local repository root the command operates on.
+Otherwise valid single-segment names, including names with spaces, remain
+supported when quoted in your shell.
 
 When a repository already has a different local `origin`, interactive terminals
 prompt before replacing it with the computed ugit URL. Non-interactive runs do
