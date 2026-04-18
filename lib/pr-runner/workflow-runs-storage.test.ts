@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resetStorageCacheForTests } from "@/lib/storage/sqlite";
+import { resetStorageCacheForTests, withStorage } from "@/lib/storage/sqlite";
 import type { ValidatedPullRequestSyncRequest } from "@/lib/pr-runner/validation";
 import type { ValidatedWorkflowRunRequest } from "@/lib/workflow-runs/validation";
 import {
@@ -132,7 +132,7 @@ describe("repo-scoped workflow run reads", () => {
       workflowIdFactory: createIdFactory("workflow-3"),
     });
 
-    expect(listWorkflowRuns(repositoryA, { storage })).toMatchObject([
+    expect(listWorkflowRuns("alpha", { storage })).toMatchObject([
       {
         id: "workflow-3",
         repositoryPath: repositoryA,
@@ -144,10 +144,38 @@ describe("repo-scoped workflow run reads", () => {
     ]);
   });
 
+  it("keeps repo-scoped workflow reads stable when the stored path drifts", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queueWorkflowRun(createWorkflowRequest(repositoryPath, "abcdef1", "lint"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+    });
+
+    driftWorkflowRunRepositoryPath(storage, "workflow-1", "/srv/ugit/aliases/alpha");
+
+    expect(listWorkflowRuns("alpha", { storage })).toMatchObject([
+      {
+        id: "workflow-1",
+        repositoryName: "alpha",
+        repositoryPath: "/srv/ugit/aliases/alpha",
+      },
+    ]);
+    expect(readWorkflowRunForRepository("alpha", "workflow-1", storage)).toMatchObject({
+      id: "workflow-1",
+      repositoryName: "alpha",
+      repositoryPath: "/srv/ugit/aliases/alpha",
+    });
+  });
+
   it("returns null when a workflow id belongs to another repository", () => {
     const workspace = createWorkspace();
     const repositoryA = createRepositorySkeleton(workspace, "alpha");
-    const repositoryB = createRepositorySkeleton(workspace, "beta");
+    createRepositorySkeleton(workspace, "beta");
     const storage = path.join(workspace, "storage", "pull-requests");
 
     queueWorkflowRun(createWorkflowRequest(repositoryA, "abcdef1", "lint"), {
@@ -157,7 +185,7 @@ describe("repo-scoped workflow run reads", () => {
       workflowIdFactory: createIdFactory("workflow-1"),
     });
 
-    expect(readWorkflowRunForRepository(repositoryB, "workflow-1", storage)).toBeNull();
+    expect(readWorkflowRunForRepository("beta", "workflow-1", storage)).toBeNull();
   });
 });
 
@@ -244,4 +272,22 @@ function createNowFactory(...timestamps: string[]): () => Date {
 
     return new Date(timestamp);
   };
+}
+
+function driftWorkflowRunRepositoryPath(
+  storage: string,
+  workflowId: string,
+  repositoryPath: string,
+): void {
+  withStorage(storage, (database) => {
+    database
+      .prepare<[string, string]>(
+        `
+          UPDATE workflow_runs
+          SET repository_path = ?
+          WHERE id = ?
+        `,
+      )
+      .run(repositoryPath, workflowId);
+  });
 }
