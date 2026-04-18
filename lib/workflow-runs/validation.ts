@@ -23,6 +23,7 @@ export type ValidatedWorkflowRunRequest = Readonly<{
   publishedBranch: GitPlatformPublishedBranch;
   repositoryName: string;
   repositoryPath: string;
+  executionRepositoryPath: string;
   workflowName: string;
 }>;
 
@@ -98,10 +99,11 @@ export function validateWorkflowRunRequest(
   return {
     publishedBranch: {
       ...publishedBranch,
-      repositoryPath: repository.repositoryPath,
+      repositoryPath: repository.executionRepositoryPath,
     },
     repositoryName: repository.repositoryName,
     repositoryPath: repository.repositoryPath,
+    executionRepositoryPath: repository.executionRepositoryPath,
     workflowName,
   };
 }
@@ -167,13 +169,18 @@ export function resolveWorkflowRunRepositoryTarget(
 ): Readonly<{
   repositoryName: string;
   repositoryPath: string;
+  executionRepositoryPath: string;
 }> {
-  const repositoryPath = normalizeWorkflowExecutionPath(repositoryPathValue, cwd);
-  const repositoryName = resolveWorkflowRepositoryNameFromPath(repositoryPath, cwd);
+  const executionRepositoryPath = normalizeWorkflowExecutionPath(repositoryPathValue, cwd);
+  const repositoryName = resolveWorkflowRepositoryNameFromPath(executionRepositoryPath, cwd);
+  const repository = resolveWorkflowReadRepository(repositoryName, {
+    cwd,
+  });
 
   return {
-    repositoryName,
-    repositoryPath,
+    repositoryName: repository.repositoryName,
+    repositoryPath: repository.repositoryPath,
+    executionRepositoryPath,
   };
 }
 

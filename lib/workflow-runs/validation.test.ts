@@ -48,7 +48,7 @@ describe("validateWorkflowRunRequest", () => {
   it("keeps the owning repository name stable when the execution path is a repo worktree", () => {
     const workspace = createWorkspace();
 
-    createRepositorySkeleton(workspace, "alpha");
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
 
     const workflowRepositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
 
@@ -75,7 +75,8 @@ describe("validateWorkflowRunRequest", () => {
         pushedAt: undefined,
       },
       repositoryName: "alpha",
-      repositoryPath: workflowRepositoryPath,
+      repositoryPath,
+      executionRepositoryPath: workflowRepositoryPath,
       workflowName: "lint",
     });
   });

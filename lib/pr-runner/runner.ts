@@ -193,6 +193,7 @@ export async function executeWorkflowRunJob(
 ): Promise<void> {
   const now = options.now ?? (() => new Date());
   const runCommand = options.runCommand ?? runAsyncCommand;
+  const executionRepositoryPath = workflowRun.executionRepositoryPath;
   let worktreePath: string | null = null;
 
   try {
@@ -201,7 +202,13 @@ export async function executeWorkflowRunJob(
       `Starting workflow ${workflowRun.workflowName} on ${workflowRun.branchName}@${workflowRun.commitHash}.\n`,
     );
 
-    worktreePath = await createDetachedWorktree(workflowRun, runCommand);
+    worktreePath = await createDetachedWorktree(
+      {
+        ...workflowRun,
+        repositoryPath: executionRepositoryPath,
+      },
+      runCommand,
+    );
 
     const workflowSummary = await executeWorkflowPackages(worktreePath, runCommand, {
       workflowName: workflowRun.workflowName,
@@ -239,7 +246,7 @@ export async function executeWorkflowRunJob(
     });
   } finally {
     if (worktreePath) {
-      await cleanupDetachedWorktree(workflowRun.repositoryPath, worktreePath, runCommand);
+      await cleanupDetachedWorktree(executionRepositoryPath, worktreePath, runCommand);
     }
   }
 }

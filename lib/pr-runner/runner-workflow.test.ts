@@ -93,6 +93,53 @@ describe("executeWorkflowRunJob", () => {
       "Workflow run workflow-1 completed with status succeeded.",
     );
   });
+
+  it("runs repo-worktree workflow executions through the queued worktree path", async () => {
+    const workspace = createWorkspace();
+
+    createRepositorySkeleton(workspace, "alpha");
+
+    const workflowRepositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queueWorkflowRun(createWorkflowRequest(workflowRepositoryPath, "abcdef1", "lint"), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-14T00:00:00.000Z"),
+      workflowIdFactory: createIdFactory("workflow-1"),
+    });
+    const [execution] = claimRunnableExecutions({
+      storage,
+      now: createNowFactory("2026-04-14T00:00:10.000Z"),
+    });
+
+    if (!execution || execution.kind !== "workflow_run") {
+      throw new Error("Expected to claim workflow-1 as a workflow run.");
+    }
+
+    const runCommand = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    }));
+
+    await executeWorkflowRunJob(execution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      runCommand,
+    });
+
+    expect(runCommand).toHaveBeenNthCalledWith(
+      1,
+      "git",
+      expect.arrayContaining(["-C", workflowRepositoryPath, "worktree", "add", "--detach"]),
+    );
+    expect(runCommand).toHaveBeenNthCalledWith(
+      2,
+      "git",
+      expect.arrayContaining(["-C", workflowRepositoryPath, "worktree", "remove", "--force"]),
+    );
+  });
 });
 
 function createWorkspace(): string {
@@ -111,22 +158,74 @@ function createRepositorySkeleton(workspace: string, repositoryName: string): st
   return repositoryPath;
 }
 
+function createRepositoryWorktree(
+  workspace: string,
+  repositoryName: string,
+  worktreeName: string,
+): string {
+  const worktreePath = path.join(
+    workspace,
+    ".data",
+    "repos",
+    repositoryName,
+    ".ugit",
+    "worktrees",
+    worktreeName,
+  );
+
+  mkdirSync(path.join(worktreePath, ".git"), { recursive: true });
+
+  return worktreePath;
+}
+
 function createWorkflowRequest(
-  repositoryPath: string,
+  executionRepositoryPath: string,
   commitHash: string,
   workflowName: string,
   branchName: string = "feature/test",
 ): ValidatedWorkflowRunRequest {
+  const { repositoryName, repositoryPath } = resolveOwningRepositoryTarget(executionRepositoryPath);
+
   return {
-    repositoryName: path.basename(repositoryPath),
+    repositoryName,
     repositoryPath,
+    executionRepositoryPath,
     publishedBranch: {
-      repositoryPath,
+      repositoryPath: executionRepositoryPath,
       branchName,
       commitHash,
       remoteName: "origin",
     },
     workflowName,
+  };
+}
+
+function resolveOwningRepositoryTarget(repositoryPath: string): {
+  repositoryName: string;
+  repositoryPath: string;
+} {
+  const repositoriesRootSegment = `${path.sep}repos${path.sep}`;
+  const repositoriesIndex = repositoryPath.lastIndexOf(repositoriesRootSegment);
+
+  if (repositoriesIndex < 0) {
+    throw new Error(`Expected ${repositoryPath} to be nested under .data/repos.`);
+  }
+
+  const repositoryRoot = repositoryPath
+    .slice(repositoriesIndex + repositoriesRootSegment.length)
+    .split(path.sep)
+    .filter((segment) => segment.length > 0)[0];
+
+  if (!repositoryRoot) {
+    throw new Error(`Expected ${repositoryPath} to include a repository name.`);
+  }
+
+  return {
+    repositoryName: repositoryRoot,
+    repositoryPath: repositoryPath.slice(
+      0,
+      repositoriesIndex + repositoriesRootSegment.length + repositoryRoot.length,
+    ),
   };
 }
 

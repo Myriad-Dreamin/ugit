@@ -34,7 +34,7 @@ describe("repo-scoped workflow API repository identity", () => {
   it("keeps queued, running, and completed repo worktree runs visible through list refreshes", async () => {
     const workspace = createWorkspace();
 
-    createRepositorySkeleton(workspace, "alpha");
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
 
     const workflowRepositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
 
@@ -62,7 +62,8 @@ describe("repo-scoped workflow API repository identity", () => {
         kind: "workflow_run",
         id: "workflow-1",
         repositoryName: "alpha",
-        repositoryPath: workflowRepositoryPath,
+        repositoryPath,
+        executionRepositoryPath: workflowRepositoryPath,
       }),
     ]);
     expect(await readWorkflowRunsPayload("alpha")).toEqual({

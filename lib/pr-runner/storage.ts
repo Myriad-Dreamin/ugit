@@ -103,6 +103,7 @@ export type ClaimedWorkflowRun = Readonly<{
   id: string;
   repositoryName: string;
   repositoryPath: string;
+  executionRepositoryPath: string;
   branchName: string;
   commitHash: string;
   workflowName: string;
@@ -234,6 +235,7 @@ type WorkflowRunRow = {
   id: string;
   repository_name: string;
   repository_path: string;
+  execution_repository_path: string | null;
   branch_name: string;
   commit_hash: string;
   workflow_name: string;
@@ -270,6 +272,7 @@ type RunnableExecutionRow = {
   branch_name: string;
   commit_hash: string;
   created_at: string;
+  execution_repository_path: string | null;
   kind: "pull_request" | "workflow_run";
   log_path: string | null;
   pull_request_id: number | null;
@@ -353,6 +356,20 @@ const MIGRATIONS: readonly StorageMigration[] = [
           ON workflow_runs(status, created_at, id);
         CREATE INDEX workflow_runs_repository_status_idx
           ON workflow_runs(repository_path, status, created_at, id);
+      `);
+    },
+  },
+  {
+    version: 3,
+    name: "add_workflow_execution_repository_path",
+    up(database) {
+      database.exec(`
+        ALTER TABLE workflow_runs
+        ADD COLUMN execution_repository_path TEXT;
+
+        UPDATE workflow_runs
+        SET execution_repository_path = repository_path
+        WHERE execution_repository_path IS NULL;
       `);
     },
   },
@@ -573,7 +590,10 @@ export function queueWorkflowRun(
   options: QueueWorkflowRunOptions = {},
 ): QueueWorkflowRunResult {
   ensurePullRequestStorage(options.storage);
-  const repository = resolveWorkflowRunRepositoryTarget(request.repositoryPath, options.cwd);
+  const repository = resolveWorkflowRunRepositoryTarget(
+    request.executionRepositoryPath,
+    options.cwd,
+  );
 
   return withStorage(options.storage, (database) =>
     runStorageTransaction(
@@ -596,6 +616,7 @@ export function queueWorkflowRun(
               string,
               string,
               string,
+              string,
               WorkflowRunStatus,
               string,
               string,
@@ -607,6 +628,7 @@ export function queueWorkflowRun(
                 id,
                 repository_name,
                 repository_path,
+                execution_repository_path,
                 branch_name,
                 commit_hash,
                 workflow_name,
@@ -615,13 +637,14 @@ export function queueWorkflowRun(
                 created_at,
                 updated_at
               )
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
           )
           .run(
             workflowId,
             repository.repositoryName,
             repository.repositoryPath,
+            repository.executionRepositoryPath,
             request.publishedBranch.branchName,
             request.publishedBranch.commitHash,
             request.workflowName,
@@ -744,9 +767,9 @@ export function claimRunnableExecutions(
     runStorageTransaction(
       database,
       (transaction) => {
-        const runningExecutions = listRunningExecutionRepositoryPaths(transaction);
-        const runningRepositoryPaths = new Set(
-          runningExecutions.map((execution) => execution.repository_path),
+        const runningExecutions = listRunningExecutionRepositoryNames(transaction);
+        const runningRepositoryNames = new Set(
+          runningExecutions.map((execution) => execution.repository_name),
         );
         const availableSlots = Math.max(MAX_ACTIVE_CI_JOBS - runningExecutions.length, 0);
 
@@ -756,8 +779,9 @@ export function claimRunnableExecutions(
 
         const selectedExecutions = selectRunnableJobs(
           listQueuedExecutionRows(transaction),
-          runningRepositoryPaths,
+          runningRepositoryNames,
           availableSlots,
+          (execution) => execution.repository_name,
         );
 
         if (selectedExecutions.length === 0) {
@@ -835,6 +859,8 @@ export function claimRunnableExecutions(
             id: execution.id,
             repositoryName: execution.repository_name,
             repositoryPath: execution.repository_path,
+            executionRepositoryPath:
+              execution.execution_repository_path ?? execution.repository_path,
             branchName: execution.branch_name,
             commitHash: execution.commit_hash,
             workflowName: execution.workflow_name,
@@ -853,10 +879,11 @@ export function claimRunnableExecutions(
 
 export function selectRunnableJobs<T extends Pick<CiJobRow, "repository_path">>(
   queuedJobs: readonly T[],
-  runningRepositoryPaths: ReadonlySet<string>,
+  runningRepositoryIdentities: ReadonlySet<string>,
   limit: number,
+  getRepositoryIdentity: (job: T) => string = (job) => job.repository_path,
 ): readonly T[] {
-  const claimedRepositoryPaths = new Set(runningRepositoryPaths);
+  const claimedRepositoryIdentities = new Set(runningRepositoryIdentities);
   const selectedJobs: T[] = [];
 
   for (const job of queuedJobs) {
@@ -864,11 +891,13 @@ export function selectRunnableJobs<T extends Pick<CiJobRow, "repository_path">>(
       break;
     }
 
-    if (claimedRepositoryPaths.has(job.repository_path)) {
+    const repositoryIdentity = getRepositoryIdentity(job);
+
+    if (claimedRepositoryIdentities.has(repositoryIdentity)) {
       continue;
     }
 
-    claimedRepositoryPaths.add(job.repository_path);
+    claimedRepositoryIdentities.add(repositoryIdentity);
     selectedJobs.push(job);
   }
 
@@ -1430,22 +1459,22 @@ function readWorkflowRunByRepository(
   return row ? toWorkflowRunRecord(row) : null;
 }
 
-function listRunningExecutionRepositoryPaths(
+function listRunningExecutionRepositoryNames(
   database: DatabaseSync,
-): readonly Pick<RunnableExecutionRow, "repository_path">[] {
+): readonly Pick<RunnableExecutionRow, "repository_name">[] {
   const runningCiJobs = database
-    .prepare<[], Pick<CiJobRow, "repository_path">>(
+    .prepare<[], Pick<CiJobRow, "repository_name">>(
       `
-        SELECT repository_path
+        SELECT repository_name
         FROM ci_jobs
         WHERE status = 'running'
       `,
     )
     .all();
   const runningWorkflowRuns = database
-    .prepare<[], Pick<WorkflowRunRow, "repository_path">>(
+    .prepare<[], Pick<WorkflowRunRow, "repository_name">>(
       `
-        SELECT repository_path
+        SELECT repository_name
         FROM workflow_runs
         WHERE status = 'running'
       `,
@@ -1472,6 +1501,7 @@ function listQueuedExecutionRows(database: DatabaseSync): readonly RunnableExecu
       branch_name: job.branch_name,
       commit_hash: job.commit_hash,
       created_at: job.created_at,
+      execution_repository_path: null,
       kind: "pull_request",
       log_path: null,
       pull_request_id: job.pull_request_id,
@@ -1495,6 +1525,7 @@ function listQueuedExecutionRows(database: DatabaseSync): readonly RunnableExecu
       branch_name: workflowRun.branch_name,
       commit_hash: workflowRun.commit_hash,
       created_at: workflowRun.created_at,
+      execution_repository_path: workflowRun.execution_repository_path,
       kind: "workflow_run",
       log_path: workflowRun.log_path,
       pull_request_id: null,
