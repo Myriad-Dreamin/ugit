@@ -166,6 +166,49 @@ describe("WorkflowRunPage", () => {
     expect(workflowRunDetailClient?.props).not.toHaveProperty("repositoryPath");
     expect(workflowRunDetailClient?.props.initialWorkflowRun).not.toHaveProperty("repositoryPath");
   });
+
+  it("requests repo-scoped workflow page data by repository name instead of repository path", async () => {
+    mockedIsConfiguredOwner.mockReturnValue(true);
+    mockedGetRepositoryByName.mockReturnValue({
+      name: "example-repo",
+      path: "/srv/ugit/aliases/example-repo",
+      relativePath: ".data/repos/example-repo",
+    });
+    mockedGetWorkflowRunPageData.mockReturnValue({
+      repositoryName: "example-repo",
+      workflowRun: {
+        id: "workflow-1",
+        repositoryName: "example-repo",
+        branchName: "feature/test",
+        commitHash: "abcdef1",
+        workflowName: "lint",
+        status: "queued",
+        errorMessage: null,
+        createdAt: "2026-04-14T00:00:00.000Z",
+        updatedAt: "2026-04-14T00:00:00.000Z",
+        startedAt: null,
+        finishedAt: null,
+      },
+      initialLog: {
+        text: "Queued workflow.\n",
+        nextOffset: 16,
+      },
+    });
+
+    await WorkflowRunPage({
+      params: {
+        user: "Myriad-Dreamin",
+        repo: "example-repo",
+        workflowId: "workflow-1",
+      },
+    });
+
+    expect(mockedGetWorkflowRunPageData).toHaveBeenCalledWith({
+      repositoryName: "example-repo",
+      workflowId: "workflow-1",
+    });
+    expect(mockedGetWorkflowRunPageData.mock.calls[0]?.[0]).not.toHaveProperty("repositoryPath");
+  });
 });
 
 type ElementWithChildren = ReactElement<Record<string, unknown> & { children?: unknown }>;

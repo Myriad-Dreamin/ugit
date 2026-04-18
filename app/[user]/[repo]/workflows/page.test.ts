@@ -204,6 +204,38 @@ describe("RepositoryWorkflowsPage", () => {
     expect(workflowRunsClient?.props).not.toHaveProperty("repositoryPath");
   });
 
+  it("builds repo-scoped workflow reads from repository name instead of repository path", async () => {
+    mockedIsConfiguredOwner.mockReturnValue(true);
+    mockedGetRepositoryByName.mockReturnValue({
+      name: "example-repo",
+      path: "/srv/ugit/aliases/example-repo",
+      relativePath: ".data/repos/example-repo",
+    });
+    mockedFetch.mockResolvedValue(
+      Response.json({
+        repositoryName: "example-repo",
+        workflowRuns: [],
+      }),
+    );
+
+    await RepositoryWorkflowsPage({
+      params: {
+        user: "Myriad-Dreamin",
+        repo: "example-repo",
+      },
+    });
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "http://localhost/api/workflows/runs?repositoryName=example-repo",
+      {
+        cache: "no-store",
+      },
+    );
+    expect(mockedFetch.mock.calls[0]?.[0]).not.toContain(
+      encodeURIComponent("/srv/ugit/aliases/example-repo"),
+    );
+  });
+
   it("uses the trusted forwarded origin when proxies append forwarded headers", async () => {
     mockedIsConfiguredOwner.mockReturnValue(true);
     mockedGetRepositoryByName.mockReturnValue({

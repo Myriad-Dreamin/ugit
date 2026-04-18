@@ -96,7 +96,7 @@ export function listWorkflowRuns(
 
   return {
     repositoryName: repository.repositoryName,
-    workflowRuns: listStoredWorkflowRuns(repository.repositoryPath, {
+    workflowRuns: listStoredWorkflowRuns(repository.repositoryName, {
       storage: options.storage,
     }).map(toWorkflowRunSummary),
   };
@@ -132,12 +132,12 @@ export function streamWorkflowRunLogs(
   options: WorkflowRunServiceOptions = {},
 ): ReadableStream<Uint8Array> {
   const request = validateWorkflowLogsRequest(payload);
-  const repositoryPath = request.repositoryName
+  const repositoryName = request.repositoryName
     ? resolveWorkflowReadRepository(request.repositoryName, {
         cwd: options.cwd,
-      }).repositoryPath
+      }).repositoryName
     : null;
-  const workflowRun = readWorkflowRunByContext(request.workflowId, repositoryPath, options.storage);
+  const workflowRun = readWorkflowRunByContext(request.workflowId, repositoryName, options.storage);
 
   if (!workflowRun) {
     throw new WorkflowRunRequestError(buildWorkflowRunNotFoundMessage(request), 404);
@@ -158,7 +158,7 @@ export function streamWorkflowRunLogs(
           while (!cancelled) {
             const currentRun = readWorkflowRunByContext(
               request.workflowId,
-              repositoryPath,
+              repositoryName,
               options.storage,
             );
 
@@ -210,7 +210,7 @@ function readRepositoryWorkflowRun(
     cwd: options.cwd,
   });
   const workflowRun = readWorkflowRunForRepository(
-    repository.repositoryPath,
+    repository.repositoryName,
     request.workflowId,
     options.storage,
   );
@@ -227,11 +227,11 @@ function readRepositoryWorkflowRun(
 
 function readWorkflowRunByContext(
   workflowId: string,
-  repositoryPath: string | null,
+  repositoryName: string | null,
   storage: StorageOptions | string | undefined,
 ): WorkflowRunRecord | null {
-  if (repositoryPath) {
-    return readWorkflowRunForRepository(repositoryPath, workflowId, storage);
+  if (repositoryName) {
+    return readWorkflowRunForRepository(repositoryName, workflowId, storage);
   }
 
   return readStoredWorkflowRun(workflowId, storage);

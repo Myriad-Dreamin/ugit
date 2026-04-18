@@ -1104,19 +1104,19 @@ export function readWorkflowRun(
 }
 
 export function readWorkflowRunForRepository(
-  repositoryPath: string,
+  repositoryName: string,
   workflowId: string,
   storage: StorageOptions | string | undefined = undefined,
 ): WorkflowRunRecord | null {
   ensurePullRequestStorage(storage);
 
   return withStorage(storage, (database) =>
-    readWorkflowRunByRepository(database, repositoryPath, workflowId),
+    readWorkflowRunByRepository(database, repositoryName, workflowId),
   );
 }
 
 export function listWorkflowRuns(
-  repositoryPath: string,
+  repositoryName: string,
   options: ListWorkflowRunsOptions = {},
 ): readonly WorkflowRunRecord[] {
   ensurePullRequestStorage(options.storage);
@@ -1127,11 +1127,11 @@ export function listWorkflowRuns(
         `
           SELECT *
           FROM workflow_runs
-          WHERE repository_path = ?
+          WHERE repository_name = ?
           ORDER BY updated_at DESC, id DESC
         `,
       )
-      .all(repositoryPath);
+      .all(repositoryName);
 
     return rows.map(toWorkflowRunRecord);
   });
@@ -1410,7 +1410,7 @@ function readWorkflowRunById(database: DatabaseSync, workflowId: string): Workfl
 
 function readWorkflowRunByRepository(
   database: DatabaseSync,
-  repositoryPath: string,
+  repositoryName: string,
   workflowId: string,
 ): WorkflowRunRecord | null {
   const row = database
@@ -1418,10 +1418,10 @@ function readWorkflowRunByRepository(
       `
         SELECT *
         FROM workflow_runs
-        WHERE repository_path = ? AND id = ?
+        WHERE repository_name = ? AND id = ?
       `,
     )
-    .get(repositoryPath, workflowId);
+    .get(repositoryName, workflowId);
 
   return row ? toWorkflowRunRecord(row) : null;
 }
