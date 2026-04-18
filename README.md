@@ -12,7 +12,7 @@ ugit pr create [-m <machine>] --base <branch> --title <title> [--body <text>] [-
 ugit pr edit [-m <machine>] [--base <branch>] [--title <title>] [--body <text>] [--draft|--ready] [directory]
 ugit workflow run [-m <machine>] [-p <local-port>] <workflow> [directory]
 ugit workflow logs [-m <machine>] [-p <local-port>] <workflowId> [directory]
-ugit create -m <machine> [directory]
+ugit create -m <machine> [--override-origin] [directory]
 ugit serve [-m <machine>] [-p <local-port>] [directory]
 ugit pr sync [-m <machine>] --base <branch> --title <title> [--body <text>] [--draft] [directory]
 ```
@@ -117,15 +117,21 @@ Machines named `local` or `localhost`, or machines whose `ssh-machine` is `local
 
 ## What `ugit create` does
 
-For `ugit create -m <machine> [directory]`, the CLI:
+For `ugit create -m <machine> [--override-origin] [directory]`, the CLI:
 
 - verifies the target directory is a local Git repository root
 - requires a local `upstream` remote
 - derives the ugit repository name from the directory name
 - creates the remote working-tree repository at `<machine.path>/.data/repos/<repo-name>`
 - configures the remote repository's `upstream` remote
-- configures the local repository's `origin` remote
+- prompts before replacing a conflicting local `origin` remote during interactive runs
+- configures or updates the local repository's `origin` remote
 - records the chosen machine in local Git config under `ugit.machine`
+
+When a repository already has a different local `origin`, interactive terminals
+prompt before replacing it with the computed ugit URL. Non-interactive runs do
+not prompt; pass `--override-origin` to approve the replacement explicitly in
+scripts or CI.
 
 ## Machine inference
 

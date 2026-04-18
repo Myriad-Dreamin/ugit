@@ -28,6 +28,8 @@ const UPSTREAM_REMOTE_NAME = "upstream";
 type CreateDirectory = (targetPath: string) => void;
 type PathExists = (targetPath: string) => boolean;
 
+export type CreateRepositoryOriginConflictResolution = "reject" | "replace";
+
 export type CreateRepositoryOptions = Readonly<{
   machineName: string;
   directory?: string;
@@ -37,6 +39,7 @@ export type CreateRepositoryOptions = Readonly<{
   runCommand?: CommandRunner;
   createDirectory?: CreateDirectory;
   pathExists?: PathExists;
+  originConflictResolution?: CreateRepositoryOriginConflictResolution;
 }>;
 
 export type CreateRepositoryResult = Readonly<{
@@ -44,6 +47,12 @@ export type CreateRepositoryResult = Readonly<{
   repositoryName: string;
   repositoryPath: string;
   remoteRepositoryPath: string;
+  originUrl: string;
+}>;
+
+export type CreateRepositoryOriginConflict = Readonly<{
+  repositoryPath: string;
+  existingOriginUrl: string;
   originUrl: string;
 }>;
 
@@ -61,7 +70,94 @@ type MachineHost = Readonly<{
   addRemote: (repositoryPath: string, remoteName: string, remoteUrl: string) => void;
 }>;
 
+type PreparedCreateRepository = Readonly<{
+  runCommand: CommandRunner;
+  createDirectory: CreateDirectory;
+  pathExists: PathExists;
+  repositoryPath: string;
+  repositoryName: string;
+  upstreamUrl: string;
+  machine: ResolvedMachine;
+  remoteRepositoryPath: string;
+  originUrl: string;
+  existingOriginUrl: string | null;
+}>;
+
+export function inspectCreateRepositoryOriginConflict(
+  options: CreateRepositoryOptions,
+): CreateRepositoryOriginConflict | null {
+  return getCreateRepositoryOriginConflict(prepareCreateRepository(options));
+}
+
 export function createRepository(options: CreateRepositoryOptions): CreateRepositoryResult {
+  const prepared = prepareCreateRepository(options);
+  const originConflict = getCreateRepositoryOriginConflict(prepared);
+  const originConflictResolution = options.originConflictResolution ?? "reject";
+
+  if (originConflict && originConflictResolution !== "replace") {
+    throw new Error(
+      `Repository ${originConflict.repositoryPath} already has an "${ORIGIN_REMOTE_NAME}" remote (${originConflict.existingOriginUrl}). Re-run ugit create with explicit origin replacement approval before pointing it at ${originConflict.originUrl}.`,
+    );
+  }
+
+  const machineHost = createMachineHost(prepared.machine, {
+    runCommand: prepared.runCommand,
+    createDirectory: prepared.createDirectory,
+    pathExists: prepared.pathExists,
+  });
+
+  if (machineHost.pathExists(prepared.remoteRepositoryPath)) {
+    throw new Error(
+      `Remote repository path ${prepared.remoteRepositoryPath} already exists on machine "${prepared.machine.name}".`,
+    );
+  }
+
+  try {
+    machineHost.ensureDirectoryExists(path.dirname(prepared.remoteRepositoryPath));
+    machineHost.initializeRepository(prepared.remoteRepositoryPath);
+    machineHost.configureReceiveUpdates(prepared.remoteRepositoryPath);
+    machineHost.addRemote(
+      prepared.remoteRepositoryPath,
+      UPSTREAM_REMOTE_NAME,
+      prepared.upstreamUrl,
+    );
+  } catch (error) {
+    throw new Error(
+      `Failed to initialize ugit repository ${prepared.remoteRepositoryPath} on machine "${prepared.machine.name}".`,
+      { cause: error },
+    );
+  }
+
+  if (!prepared.existingOriginUrl) {
+    runGit(
+      prepared.repositoryPath,
+      ["remote", "add", ORIGIN_REMOTE_NAME, prepared.originUrl],
+      prepared.runCommand,
+    );
+  } else if (originConflict) {
+    runGit(
+      prepared.repositoryPath,
+      ["remote", "set-url", ORIGIN_REMOTE_NAME, prepared.originUrl],
+      prepared.runCommand,
+    );
+  }
+
+  runGit(
+    prepared.repositoryPath,
+    ["config", "--local", MACHINE_CONFIG_KEY, prepared.machine.name],
+    prepared.runCommand,
+  );
+
+  return {
+    machineName: prepared.machine.name,
+    repositoryName: prepared.repositoryName,
+    repositoryPath: prepared.repositoryPath,
+    remoteRepositoryPath: prepared.remoteRepositoryPath,
+    originUrl: prepared.originUrl,
+  };
+}
+
+function prepareCreateRepository(options: CreateRepositoryOptions): PreparedCreateRepository {
   const cwd = options.cwd ?? process.cwd();
   const runCommand = options.runCommand ?? runLocalCommand;
   const createDirectory = options.createDirectory ?? createLocalDirectory;
@@ -87,53 +183,34 @@ export function createRepository(options: CreateRepositoryOptions): CreateReposi
       `Repository ${repositoryPath} requires a local "${UPSTREAM_REMOTE_NAME}" remote before ugit create can run.`,
     );
   }
+
   const machine = resolveMachine(config, options.machineName);
-  const remoteRepositoryPath = getRemoteRepositoryPath(machine, repositoryName);
-  const originUrl = getRemoteRepositoryUrl(machine, repositoryName);
-  const existingOriginUrl = readOptionalRemoteUrl(repositoryPath, ORIGIN_REMOTE_NAME, runCommand);
 
-  if (existingOriginUrl && existingOriginUrl !== originUrl) {
-    throw new Error(
-      `Repository ${repositoryPath} already has an "${ORIGIN_REMOTE_NAME}" remote (${existingOriginUrl}). Remove it or point it at ${originUrl} before running ugit create.`,
-    );
-  }
-
-  const machineHost = createMachineHost(machine, {
+  return {
     runCommand,
     createDirectory,
     pathExists,
-  });
+    repositoryPath,
+    repositoryName,
+    upstreamUrl,
+    machine,
+    remoteRepositoryPath: getRemoteRepositoryPath(machine, repositoryName),
+    originUrl: getRemoteRepositoryUrl(machine, repositoryName),
+    existingOriginUrl: readOptionalRemoteUrl(repositoryPath, ORIGIN_REMOTE_NAME, runCommand),
+  };
+}
 
-  if (machineHost.pathExists(remoteRepositoryPath)) {
-    throw new Error(
-      `Remote repository path ${remoteRepositoryPath} already exists on machine "${machine.name}".`,
-    );
+function getCreateRepositoryOriginConflict(
+  prepared: PreparedCreateRepository,
+): CreateRepositoryOriginConflict | null {
+  if (!prepared.existingOriginUrl || prepared.existingOriginUrl === prepared.originUrl) {
+    return null;
   }
-
-  try {
-    machineHost.ensureDirectoryExists(path.dirname(remoteRepositoryPath));
-    machineHost.initializeRepository(remoteRepositoryPath);
-    machineHost.configureReceiveUpdates(remoteRepositoryPath);
-    machineHost.addRemote(remoteRepositoryPath, UPSTREAM_REMOTE_NAME, upstreamUrl);
-  } catch (error) {
-    throw new Error(
-      `Failed to initialize ugit repository ${remoteRepositoryPath} on machine "${machine.name}".`,
-      { cause: error },
-    );
-  }
-
-  if (!existingOriginUrl) {
-    runGit(repositoryPath, ["remote", "add", ORIGIN_REMOTE_NAME, originUrl], runCommand);
-  }
-
-  runGit(repositoryPath, ["config", "--local", MACHINE_CONFIG_KEY, machine.name], runCommand);
 
   return {
-    machineName: machine.name,
-    repositoryName,
-    repositoryPath,
-    remoteRepositoryPath,
-    originUrl,
+    repositoryPath: prepared.repositoryPath,
+    existingOriginUrl: prepared.existingOriginUrl,
+    originUrl: prepared.originUrl,
   };
 }
 

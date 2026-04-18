@@ -45,7 +45,7 @@ describe("createRepository preconditions", () => {
     );
   });
 
-  it("fails before remote setup when origin points somewhere else", () => {
+  it("fails before remote setup when origin points somewhere else without replacement approval", () => {
     const repositoryPath = createGitRepository();
     const createDirectory = vi.fn();
 
@@ -60,13 +60,32 @@ describe("createRepository preconditions", () => {
         createDirectory,
       }),
     ).toThrow(
-      `Repository ${repositoryPath} already has an "origin" remote (ssh://elsewhere/example.git).`,
+      `Repository ${repositoryPath} already has an "origin" remote (ssh://elsewhere/example.git). Re-run ugit create with explicit origin replacement approval before pointing it at`,
     );
     expect(createDirectory).not.toHaveBeenCalled();
   });
 });
 
 describe("createRepository", () => {
+  it("replaces a conflicting local origin when replacement is approved", () => {
+    const repositoryPath = createGitRepository();
+    const machineRoot = createWorkspace();
+    const upstreamUrl = "https://github.com/example/upstream.git";
+
+    git(repositoryPath, ["remote", "add", "upstream", upstreamUrl]);
+    git(repositoryPath, ["remote", "add", "origin", "ssh://elsewhere/example.git"]);
+
+    const result = createRepository({
+      config: createLocalConfig(machineRoot),
+      machineName: "local",
+      directory: repositoryPath,
+      originConflictResolution: "replace",
+    });
+
+    expect(git(repositoryPath, ["remote", "get-url", "origin"])).toBe(result.originUrl);
+    expect(existsSync(path.join(result.remoteRepositoryPath, ".git", "HEAD"))).toBe(true);
+  });
+
   it("initializes a local ugit repository and records the selected machine", () => {
     const repositoryPath = createGitRepository();
     const machineRoot = createWorkspace();
@@ -233,6 +252,120 @@ describe("createRepository", () => {
       args: ["config", "--local", "ugit.machine", "machine-x"],
       cwd: repositoryPath,
     });
+  });
+
+  it("uses git remote set-url when ssh-backed setup replaces a conflicting origin", () => {
+    const repositoryPath = "/workspace/example-repo";
+    const recordedCalls: Array<{
+      command: string;
+      args: string[];
+      cwd?: string;
+    }> = [];
+
+    const runCommand: CommandRunner = vi.fn(
+      (command: string, args: readonly string[], options: CommandRunnerOptions = {}): string => {
+        recordedCalls.push({
+          command,
+          args: [...args],
+          cwd: options.cwd,
+        });
+
+        if (
+          command === "git" &&
+          options.cwd === repositoryPath &&
+          args[0] === "rev-parse" &&
+          args[1] === "--show-toplevel"
+        ) {
+          return repositoryPath;
+        }
+
+        if (
+          command === "git" &&
+          options.cwd === repositoryPath &&
+          args[0] === "remote" &&
+          args[1] === "get-url" &&
+          args[2] === "upstream"
+        ) {
+          return "https://github.com/example/upstream.git";
+        }
+
+        if (
+          command === "git" &&
+          options.cwd === repositoryPath &&
+          args[0] === "remote" &&
+          args[1] === "get-url" &&
+          args[2] === "origin"
+        ) {
+          return "ssh://elsewhere/example.git";
+        }
+
+        if (command === "ssh") {
+          const remoteCommand = args.at(-1) ?? "";
+
+          if (
+            remoteCommand.includes("test") &&
+            remoteCommand.includes("/srv/ugit/.data/repos/example-repo")
+          ) {
+            throw createExecError("", 1);
+          }
+
+          return "";
+        }
+
+        if (
+          command === "git" &&
+          options.cwd === repositoryPath &&
+          args[0] === "remote" &&
+          args[1] === "set-url" &&
+          args[2] === "origin"
+        ) {
+          return "";
+        }
+
+        if (
+          command === "git" &&
+          options.cwd === repositoryPath &&
+          args[0] === "config" &&
+          args[1] === "--local" &&
+          args[2] === "ugit.machine"
+        ) {
+          return "";
+        }
+
+        throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
+      },
+    );
+
+    createRepository({
+      config: createRemoteConfig("/srv/ugit"),
+      machineName: "machine-x",
+      directory: repositoryPath,
+      cwd: "/",
+      runCommand,
+      pathExists: () => true,
+      originConflictResolution: "replace",
+    });
+
+    expect(recordedCalls).toContainEqual({
+      command: "git",
+      args: [
+        "remote",
+        "set-url",
+        "origin",
+        "ssh://kamiya-machine-x/srv/ugit/.data/repos/example-repo",
+      ],
+      cwd: repositoryPath,
+    });
+    expect(
+      recordedCalls.find(
+        (call) =>
+          call.command === "git" &&
+          call.cwd === repositoryPath &&
+          call.args[0] === "remote" &&
+          call.args[1] === "add" &&
+          call.args[2] === "origin",
+      ),
+    ).toBeUndefined();
   });
 
   it("passes the full ssh setup payload to remote sh -lc as one argument", () => {
