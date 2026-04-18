@@ -1,16 +1,22 @@
+import path from "node:path";
 import { Command, Option } from "clipanion";
+import { resolveRepositoryRoot, runLocalCommand } from "../git";
 import { resolveConfiguredMachine } from "../machine";
-import { queueWorkflowRun } from "../workflow";
+import { queueWorkflowRun, runLocalWorkflow } from "../workflow";
 
 export class WorkflowRunCommand extends Command {
   static paths = [["workflow", "run"]];
 
   static usage = Command.Usage({
     category: "Workflow",
-    description: "Queue one ugit workflow run from the current branch.",
+    description: "Queue one remote workflow run, or debug one locally with --local.",
     details:
-      "Pushes the current branch to the ugit origin, then queues one named workflow on the remote server over HTTP-over-SSH. Manual workflow runs share the same CI capacity limits as pull-request jobs but never auto-merge.",
+      "Without --local, pushes the current branch to the ugit origin, then queues one named workflow on the remote server over HTTP-over-SSH. Pass --local to run the named .ugit/workflows/<workflow> package directly against the current repository working tree in the foreground. Local runs stream directly to the terminal, may mutate workflow package dependency state, and do not produce a workflowId for ugit workflow logs.",
     examples: [
+      [
+        "Debug the lint workflow locally against the current working tree",
+        "ugit workflow run --local lint .",
+      ],
       ["Queue the lint workflow for the current branch", "ugit workflow run lint"],
       [
         "Run a workflow on another machine using a fixed tunnel port",
@@ -30,6 +36,11 @@ export class WorkflowRunCommand extends Command {
     required: false,
   });
 
+  local = Option.Boolean("--local", false, {
+    description:
+      "Run the named workflow package locally in the foreground against the current working tree. Incompatible with --machine and --port.",
+  });
+
   workflowName = Option.String({
     name: "workflow",
   });
@@ -40,6 +51,27 @@ export class WorkflowRunCommand extends Command {
   });
 
   async execute(): Promise<number> {
+    if (this.local) {
+      if (this.machine || this.port) {
+        this.context.stderr.write(
+          "The --machine and --port flags are only available for remote queued workflow runs. Remove them when using --local.\n",
+        );
+
+        return 1;
+      }
+
+      const repositoryPath = resolveRepositoryRoot(
+        path.resolve(this.directory ?? "."),
+        runLocalCommand,
+      );
+
+      return await runLocalWorkflow({
+        repositoryPath,
+        workflowName: this.workflowName,
+        stdout: this.context.stdout,
+      });
+    }
+
     const resolved = resolveConfiguredMachine({
       machineName: this.machine ?? undefined,
       directory: this.directory ?? undefined,
