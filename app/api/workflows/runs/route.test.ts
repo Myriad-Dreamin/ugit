@@ -24,7 +24,7 @@ describe("GET /api/workflows/runs", () => {
     });
 
     const response = await GET(
-      new Request("http://localhost/api/workflows/runs?repositoryName=alpha"),
+      new Request("https://ugit.example.test/api/workflows/runs?repositoryName=alpha"),
     );
 
     expect(response.status).toBe(200);
@@ -38,6 +38,7 @@ describe("GET /api/workflows/runs", () => {
       workflowRuns: [],
     });
     expect(payload).not.toHaveProperty("repositoryPath");
+    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
   it("returns not found when the repository name does not resolve on the server", async () => {
