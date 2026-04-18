@@ -1,7 +1,9 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runAsyncCommand } from "@/lib/pr-runner/process";
 import { resetStorageCacheForTests } from "@/lib/storage/sqlite";
 import type { ValidatedWorkflowRunRequest } from "@/lib/workflow-runs/validation";
 
@@ -44,31 +46,28 @@ afterEach(() => {
 });
 
 describe("executeWorkflowRunJob", () => {
-  it("marks the workflow run as succeeded and appends durable logs", async () => {
+  it("fails safely when workflow1 already contains repository content", async () => {
     const workspace = createWorkspace();
-    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
-    const storage = path.join(workspace, "storage", "pull-requests");
+    const repositoryPath = createGitRepository(workspace, "alpha");
 
-    const queued = queueWorkflowRun(createWorkflowRequest(repositoryPath, "abcdef1", "lint"), {
+    commitRepositoryFile(
+      repositoryPath,
+      "workflow1/project-file.txt",
+      "tracked\n",
+      "add workflow1",
+    );
+
+    const commitHash = readGitOutput(repositoryPath, "rev-parse", "HEAD");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const runCommand = vi.fn(runAsyncCommand);
+    const queued = queueWorkflowRun(createWorkflowRequest(repositoryPath, commitHash, "lint"), {
       cwd: workspace,
       storage,
       now: createNowFactory("2026-04-14T00:00:00.000Z"),
       workflowIdFactory: createIdFactory("workflow-1"),
     });
-    const [execution] = claimRunnableExecutions({
-      storage,
-      now: createNowFactory("2026-04-14T00:00:10.000Z"),
-    });
-
-    if (!execution || execution.kind !== "workflow_run") {
-      throw new Error("Expected to claim workflow-1 as a workflow run.");
-    }
-
-    const runCommand = vi.fn(async () => ({
-      exitCode: 0,
-      stdout: "",
-      stderr: "",
-    }));
+    const execution = claimWorkflowRun(storage, "2026-04-14T00:00:10.000Z");
+    const contentPath = path.join(repositoryPath, "workflow1", "project-file.txt");
 
     await executeWorkflowRunJob(execution, {
       storage,
@@ -76,68 +75,240 @@ describe("executeWorkflowRunJob", () => {
       runCommand,
     });
 
+    expect(executeWorkflowPackages).not.toHaveBeenCalled();
+    expect(readFileSync(contentPath, "utf8")).toBe("tracked\n");
+    expect(readWorkflowRun("workflow-1", storage)).toMatchObject({
+      id: "workflow-1",
+      status: "failed",
+      errorMessage: expect.stringContaining("Refusing to remove"),
+    });
+    expect(readFileSync(queued.workflowRun.logPath, "utf8")).toContain("Refusing to remove");
+    expect(listWorktreeRemovals(runCommand)).toHaveLength(0);
+  });
+
+  it("creates and reuses the managed workflow worktree without normal cleanup", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createGitRepository(workspace, "alpha");
+    const commitHash = readGitOutput(repositoryPath, "rev-parse", "HEAD");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const runCommand = vi.fn(runAsyncCommand);
+
+    const firstQueued = queueWorkflowRun(
+      createWorkflowRequest(repositoryPath, commitHash, "lint"),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-14T00:00:00.000Z"),
+        workflowIdFactory: createIdFactory("workflow-1"),
+      },
+    );
+    const firstExecution = claimWorkflowRun(storage, "2026-04-14T00:00:10.000Z");
+    const worktreePath = path.join(repositoryPath, "workflow1");
+
+    await executeWorkflowRunJob(firstExecution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      runCommand,
+    });
+
+    const secondQueued = queueWorkflowRun(
+      createWorkflowRequest(repositoryPath, commitHash, "lint"),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-14T00:01:00.000Z"),
+        workflowIdFactory: createIdFactory("workflow-2"),
+      },
+    );
+    const secondExecution = claimWorkflowRun(storage, "2026-04-14T00:01:10.000Z");
+
+    await executeWorkflowRunJob(secondExecution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:01:20.000Z"),
+      runCommand,
+    });
+
     expect(executeWorkflowPackages).toHaveBeenCalledWith(
-      expect.any(String),
+      worktreePath,
       runCommand,
       expect.objectContaining({
         workflowName: "lint",
         onOutput: expect.any(Function),
       }),
     );
+    expect(executeWorkflowPackages).toHaveBeenNthCalledWith(
+      2,
+      worktreePath,
+      runCommand,
+      expect.objectContaining({
+        workflowName: "lint",
+        onOutput: expect.any(Function),
+      }),
+    );
+    expect(existsSync(worktreePath)).toBe(true);
     expect(readWorkflowRun("workflow-1", storage)).toMatchObject({
       id: "workflow-1",
       status: "succeeded",
       errorMessage: null,
     });
-    expect(readFileSync(queued.workflowRun.logPath, "utf8")).toContain(
+    expect(readWorkflowRun("workflow-2", storage)).toMatchObject({
+      id: "workflow-2",
+      status: "succeeded",
+      errorMessage: null,
+    });
+    expect(readFileSync(firstQueued.workflowRun.logPath, "utf8")).toContain(
       "Workflow run workflow-1 completed with status succeeded.",
     );
+    expect(readFileSync(secondQueued.workflowRun.logPath, "utf8")).toContain(
+      "Workflow run workflow-2 completed with status succeeded.",
+    );
+    expect(listWorktreeRemovals(runCommand)).toHaveLength(0);
   });
 
-  it("runs repo-worktree workflow executions through the queued worktree path", async () => {
+  it("resets tracked state to the queued commit while keeping untracked cache files", async () => {
     const workspace = createWorkspace();
-
-    createRepositorySkeleton(workspace, "alpha");
-
-    const workflowRepositoryPath = createRepositoryWorktree(workspace, "alpha", "feature/test");
+    const repositoryPath = createGitRepository(workspace, "alpha");
+    const commitHash = readGitOutput(repositoryPath, "rev-parse", "HEAD");
     const storage = path.join(workspace, "storage", "pull-requests");
+    const runCommand = vi.fn(runAsyncCommand);
 
-    queueWorkflowRun(createWorkflowRequest(workflowRepositoryPath, "abcdef1", "lint"), {
+    const firstExecution = queueAndClaimWorkflowRun({
       cwd: workspace,
+      commitHash,
+      repositoryPath,
       storage,
-      now: createNowFactory("2026-04-14T00:00:00.000Z"),
-      workflowIdFactory: createIdFactory("workflow-1"),
+      timestamp: "2026-04-14T00:00:00.000Z",
+      workflowId: "workflow-1",
     });
-    const [execution] = claimRunnableExecutions({
-      storage,
-      now: createNowFactory("2026-04-14T00:00:10.000Z"),
-    });
+    const worktreePath = path.join(repositoryPath, "workflow1");
 
-    if (!execution || execution.kind !== "workflow_run") {
-      throw new Error("Expected to claim workflow-1 as a workflow run.");
-    }
-
-    const runCommand = vi.fn(async () => ({
-      exitCode: 0,
-      stdout: "",
-      stderr: "",
-    }));
-
-    await executeWorkflowRunJob(execution, {
+    await executeWorkflowRunJob(firstExecution, {
       storage,
       now: createNowFactory("2026-04-14T00:00:20.000Z"),
       runCommand,
     });
 
-    expect(runCommand).toHaveBeenNthCalledWith(
-      1,
-      "git",
-      expect.arrayContaining(["-C", workflowRepositoryPath, "worktree", "add", "--detach"]),
+    writeFileSync(path.join(worktreePath, "README.md"), "# drift\n", "utf8");
+    writeFileSync(path.join(worktreePath, "cache.txt"), "keep-me\n", "utf8");
+    execFileSync("git", ["-C", worktreePath, "switch", "-q", "-c", "scratch"], {
+      stdio: "ignore",
+    });
+
+    const secondExecution = queueAndClaimWorkflowRun({
+      cwd: workspace,
+      commitHash,
+      repositoryPath,
+      storage,
+      timestamp: "2026-04-14T00:01:00.000Z",
+      workflowId: "workflow-2",
+    });
+
+    await executeWorkflowRunJob(secondExecution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:01:20.000Z"),
+      runCommand,
+    });
+
+    expect(readFileSync(path.join(worktreePath, "README.md"), "utf8")).toBe("# alpha\n");
+    expect(readFileSync(path.join(worktreePath, "cache.txt"), "utf8")).toBe("keep-me\n");
+    expect(readGitOutput(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+  });
+
+  it("recovers the managed worktree when linked-worktree metadata is missing", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createGitRepository(workspace, "alpha");
+    const commitHash = readGitOutput(repositoryPath, "rev-parse", "HEAD");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const runCommand = vi.fn(runAsyncCommand);
+
+    const firstExecution = queueAndClaimWorkflowRun({
+      cwd: workspace,
+      commitHash,
+      repositoryPath,
+      storage,
+      timestamp: "2026-04-14T00:00:00.000Z",
+      workflowId: "workflow-1",
+    });
+    const worktreePath = path.join(repositoryPath, "workflow1");
+
+    await executeWorkflowRunJob(firstExecution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      runCommand,
+    });
+
+    const linkedGitDir = readLinkedGitDir(worktreePath);
+
+    rmSync(linkedGitDir, { recursive: true, force: true });
+    writeFileSync(path.join(worktreePath, "stale-cache.txt"), "stale\n", "utf8");
+
+    const secondExecution = queueAndClaimWorkflowRun({
+      cwd: workspace,
+      commitHash,
+      repositoryPath,
+      storage,
+      timestamp: "2026-04-14T00:01:00.000Z",
+      workflowId: "workflow-2",
+    });
+
+    await executeWorkflowRunJob(secondExecution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:01:20.000Z"),
+      runCommand,
+    });
+
+    expect(existsSync(worktreePath)).toBe(true);
+    expect(existsSync(path.join(worktreePath, "stale-cache.txt"))).toBe(false);
+    expect(readGitOutput(worktreePath, "rev-parse", "--git-common-dir")).toBe(
+      path.join(repositoryPath, ".git"),
     );
-    expect(runCommand).toHaveBeenNthCalledWith(
-      2,
-      "git",
-      expect.arrayContaining(["-C", workflowRepositoryPath, "worktree", "remove", "--force"]),
+  });
+
+  it("recovers the managed worktree when the linked .git file disappears", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createGitRepository(workspace, "alpha");
+    const commitHash = readGitOutput(repositoryPath, "rev-parse", "HEAD");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const runCommand = vi.fn(runAsyncCommand);
+
+    const firstExecution = queueAndClaimWorkflowRun({
+      cwd: workspace,
+      commitHash,
+      repositoryPath,
+      storage,
+      timestamp: "2026-04-14T00:00:00.000Z",
+      workflowId: "workflow-1",
+    });
+    const worktreePath = path.join(repositoryPath, "workflow1");
+
+    await executeWorkflowRunJob(firstExecution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      runCommand,
+    });
+
+    rmSync(path.join(worktreePath, ".git"), { force: true });
+    writeFileSync(path.join(worktreePath, "stale-cache.txt"), "stale\n", "utf8");
+
+    const secondExecution = queueAndClaimWorkflowRun({
+      cwd: workspace,
+      commitHash,
+      repositoryPath,
+      storage,
+      timestamp: "2026-04-14T00:01:00.000Z",
+      workflowId: "workflow-2",
+    });
+
+    await executeWorkflowRunJob(secondExecution, {
+      storage,
+      now: createNowFactory("2026-04-14T00:01:20.000Z"),
+      runCommand,
+    });
+
+    expect(existsSync(worktreePath)).toBe(true);
+    expect(existsSync(path.join(worktreePath, "stale-cache.txt"))).toBe(false);
+    expect(readGitOutput(worktreePath, "rev-parse", "--git-common-dir")).toBe(
+      path.join(repositoryPath, ".git"),
     );
   });
 });
@@ -150,32 +321,78 @@ function createWorkspace(): string {
   return workspace;
 }
 
-function createRepositorySkeleton(workspace: string, repositoryName: string): string {
+function createGitRepository(workspace: string, repositoryName: string): string {
   const repositoryPath = path.join(workspace, ".data", "repos", repositoryName);
 
-  mkdirSync(path.join(repositoryPath, ".git"), { recursive: true });
+  mkdirSync(path.dirname(repositoryPath), { recursive: true });
+  execFileSync("git", ["-c", "init.defaultBranch=main", "init", "--quiet", repositoryPath], {
+    stdio: "ignore",
+  });
+  execFileSync("git", ["-C", repositoryPath, "config", "user.name", "ugit-test"], {
+    stdio: "ignore",
+  });
+  execFileSync("git", ["-C", repositoryPath, "config", "user.email", "ugit@example.com"], {
+    stdio: "ignore",
+  });
+
+  writeFileSync(path.join(repositoryPath, "README.md"), "# alpha\n", "utf8");
+  execFileSync("git", ["-C", repositoryPath, "add", "README.md"], {
+    stdio: "ignore",
+  });
+  execFileSync("git", ["-C", repositoryPath, "commit", "-q", "-m", "init"], {
+    stdio: "ignore",
+  });
 
   return repositoryPath;
 }
 
-function createRepositoryWorktree(
-  workspace: string,
-  repositoryName: string,
-  worktreeName: string,
-): string {
-  const worktreePath = path.join(
-    workspace,
-    ".data",
-    "repos",
-    repositoryName,
-    ".ugit",
-    "worktrees",
-    worktreeName,
-  );
+function commitRepositoryFile(
+  repositoryPath: string,
+  relativePath: string,
+  contents: string,
+  message: string,
+): void {
+  const filePath = path.join(repositoryPath, relativePath);
 
-  mkdirSync(path.join(worktreePath, ".git"), { recursive: true });
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, contents, "utf8");
+  execFileSync("git", ["-C", repositoryPath, "add", relativePath], {
+    stdio: "ignore",
+  });
+  execFileSync("git", ["-C", repositoryPath, "commit", "-q", "-m", message], {
+    stdio: "ignore",
+  });
+}
 
-  return worktreePath;
+function claimWorkflowRun(storage: string, timestamp: string) {
+  const [execution] = claimRunnableExecutions({
+    storage,
+    now: createNowFactory(timestamp),
+  });
+
+  if (!execution || execution.kind !== "workflow_run") {
+    throw new Error("Expected to claim a workflow run.");
+  }
+
+  return execution;
+}
+
+function queueAndClaimWorkflowRun(options: {
+  cwd: string;
+  commitHash: string;
+  repositoryPath: string;
+  storage: string;
+  timestamp: string;
+  workflowId: string;
+}) {
+  queueWorkflowRun(createWorkflowRequest(options.repositoryPath, options.commitHash, "lint"), {
+    cwd: options.cwd,
+    storage: options.storage,
+    now: createNowFactory(options.timestamp),
+    workflowIdFactory: createIdFactory(options.workflowId),
+  });
+
+  return claimWorkflowRun(options.storage, options.timestamp);
 }
 
 function createWorkflowRequest(
@@ -251,4 +468,27 @@ function createNowFactory(...timestamps: string[]): () => Date {
 
     return new Date(timestamp);
   };
+}
+
+function listWorktreeRemovals(runCommand: ReturnType<typeof vi.fn>): string[] {
+  return runCommand.mock.calls
+    .filter(([, args]) => args.includes("worktree") && args.includes("remove"))
+    .map(([, args]) => String(args[args.length - 1]));
+}
+
+function readGitOutput(repositoryPath: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", repositoryPath, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function readLinkedGitDir(worktreePath: string): string {
+  const gitFile = readFileSync(path.join(worktreePath, ".git"), "utf8").trim();
+
+  if (!gitFile.startsWith("gitdir: ")) {
+    throw new Error(`Expected ${worktreePath}/.git to point at a linked-worktree gitdir.`);
+  }
+
+  return gitFile.slice("gitdir: ".length);
 }

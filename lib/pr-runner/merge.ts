@@ -1,6 +1,7 @@
 import "server-only";
 
 import { combineCommandOutput, runAsyncCommand, type AsyncCommandRunner } from "./process";
+import { evictManagedWorkflowWorktreeForCommit } from "./worktrees";
 
 export type FastForwardMergeResult = Readonly<{
   message: string;
@@ -68,6 +69,19 @@ export async function attemptFastForwardMerge(
     return {
       status: "skipped",
       message: SUPERSEDED_MERGE_MESSAGE,
+    };
+  }
+
+  try {
+    await evictManagedWorkflowWorktreeForCommit(
+      options.repositoryPath,
+      options.commitHash,
+      runCommand,
+    );
+  } catch (error) {
+    return {
+      status: "failed",
+      message: error instanceof Error ? error.message : String(error),
     };
   }
 

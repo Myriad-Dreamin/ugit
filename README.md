@@ -254,9 +254,10 @@ Workflow contract:
 
 Execution model:
 
-- CI runs from an isolated detached git worktree at the queued commit
-- manual workflow runs execute exactly one `.ugit/workflows/<workflow>/` package from the queued commit and never attempt a merge
+- CI runs from an isolated detached git worktree at the queued commit and removes that temporary checkout after the job finishes
+- manual workflow runs reuse the managed repo-local worktree `.data/repos/<repo>/workflow1`, reset tracked state to the queued commit before each run, preserve reusable untracked workflow caches during normal preparation, and never attempt a merge
 - final result artifacts are written to `.data/ci-results/<repo>/<branch>.json`
 - manual workflow logs are appended to `.data/workflow-run-logs/<repo>/<workflowId>.log`
 - green pull requests attempt a fast-forward-only merge into the requested base branch
+- if a fast-forward merge starts tracking `workflow1`, ugit removes the managed linked worktree first so the mirrored repository stays clean and the path can become ordinary repository content
 - merge failures are persisted as CI failures without creating merge commits
