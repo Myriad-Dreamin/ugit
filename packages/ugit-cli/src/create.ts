@@ -16,6 +16,7 @@ import {
   runGit,
   runLocalCommand,
   runRemoteShellCommand,
+  shellQuote,
   type CommandRunner,
 } from "./git";
 import { MACHINE_CONFIG_KEY } from "./machine";
@@ -24,6 +25,7 @@ export type { CommandRunner, CommandRunnerOptions } from "./git";
 
 const ORIGIN_REMOTE_NAME = "origin";
 const UPSTREAM_REMOTE_NAME = "upstream";
+const SAFE_SHELL_ARGUMENT_PATTERN = /^[A-Za-z0-9_./:@%+=,-]+$/;
 
 type CreateDirectory = (targetPath: string) => void;
 type PathExists = (targetPath: string) => boolean;
@@ -292,7 +294,15 @@ function createLocalSetupError(
 }
 
 function createLocalGitCommand(repositoryPath: string, args: readonly string[]): string {
-  return ["git", "-C", repositoryPath, ...args].join(" ");
+  return ["git", "-C", repositoryPath, ...args].map(formatShellArgument).join(" ");
+}
+
+function formatShellArgument(value: string): string {
+  if (value.length > 0 && SAFE_SHELL_ARGUMENT_PATTERN.test(value)) {
+    return value;
+  }
+
+  return shellQuote(value);
 }
 
 function createMachineHost(

@@ -564,6 +564,119 @@ describe("createRepository", () => {
     expect(error.message).not.toContain("remote set-url origin");
   });
 
+  it("quotes space-containing paths in manual recovery commands", () => {
+    const repositoryPath = "/workspace/team repo";
+    const remoteRepositoryPath = "/srv/ugit root/.data/repos/team repo";
+
+    const error = captureThrownError(() =>
+      createRepository({
+        config: createLocalConfig("/srv/ugit root"),
+        machineName: "local",
+        directory: repositoryPath,
+        cwd: "/",
+        createDirectory: () => {},
+        pathExists: (targetPath) => targetPath === repositoryPath,
+        originConflictResolution: "replace",
+        runCommand: vi.fn(
+          (
+            command: string,
+            args: readonly string[],
+            options: CommandRunnerOptions = {},
+          ): string => {
+            if (
+              command === "git" &&
+              options.cwd === repositoryPath &&
+              args[0] === "rev-parse" &&
+              args[1] === "--show-toplevel"
+            ) {
+              return repositoryPath;
+            }
+
+            if (
+              command === "git" &&
+              options.cwd === repositoryPath &&
+              args[0] === "remote" &&
+              args[1] === "get-url" &&
+              args[2] === "upstream"
+            ) {
+              return "https://github.com/example/upstream.git";
+            }
+
+            if (
+              command === "git" &&
+              options.cwd === repositoryPath &&
+              args[0] === "remote" &&
+              args[1] === "get-url" &&
+              args[2] === "origin"
+            ) {
+              return "ssh://elsewhere/example.git";
+            }
+
+            if (
+              command === "git" &&
+              args[0] === "-c" &&
+              args[1] === "init.defaultBranch=main" &&
+              args[2] === "init" &&
+              args[3] === "--quiet" &&
+              args[4] === remoteRepositoryPath
+            ) {
+              return "";
+            }
+
+            if (
+              command === "git" &&
+              options.cwd === remoteRepositoryPath &&
+              args[0] === "config" &&
+              args[1] === "--local" &&
+              args[2] === "receive.denyCurrentBranch"
+            ) {
+              return "";
+            }
+
+            if (
+              command === "git" &&
+              options.cwd === remoteRepositoryPath &&
+              args[0] === "remote" &&
+              args[1] === "add" &&
+              args[2] === "upstream"
+            ) {
+              return "";
+            }
+
+            if (
+              command === "git" &&
+              options.cwd === repositoryPath &&
+              args[0] === "remote" &&
+              args[1] === "set-url" &&
+              args[2] === "origin"
+            ) {
+              throw new Error("set-url failed");
+            }
+
+            if (
+              command === "git" &&
+              options.cwd === repositoryPath &&
+              args[0] === "config" &&
+              args[1] === "--local" &&
+              args[2] === "ugit.machine"
+            ) {
+              return "";
+            }
+
+            throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
+          },
+        ),
+      }),
+    );
+
+    expect(error.message).toContain(
+      "git -C '/workspace/team repo' remote set-url origin '/srv/ugit root/.data/repos/team repo'",
+    );
+    expect(error.message).toContain(
+      "git -C '/workspace/team repo' config --local ugit.machine local",
+    );
+  });
+
   it("passes the full ssh setup payload to remote sh -lc as one argument", () => {
     const repositoryPath = createGitRepository();
     const machineRoot = createWorkspace();
