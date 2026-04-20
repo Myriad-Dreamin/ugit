@@ -60,6 +60,98 @@ export type PullRequestSummary = {
   updatedAt: string;
 };
 
+export type BrowserPullRequestLatestJobSummary = Omit<PullRequestLatestJobSummary, "resultPath"> & {
+  commitHash: string;
+};
+
+export type BrowserPullRequestSummary = {
+  id: number;
+  repositoryName: string;
+  branchName: string;
+  baseBranch: string;
+  title: string;
+  body: string;
+  draft: boolean;
+  status: PullRequestStatus;
+  state: Exclude<PullRequestListState, "all">;
+  latestCommitHash: string;
+  latestJob: BrowserPullRequestLatestJobSummary | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PullRequestActivityType =
+  | "created"
+  | "synchronized"
+  | "edited"
+  | "ci_started"
+  | "ci_finished"
+  | "merged";
+
+export type PullRequestActivityEntry = {
+  id: string;
+  type: PullRequestActivityType;
+  title: string;
+  description: string;
+  jobId: string | null;
+  occurredAt: string;
+};
+
+export type PullRequestWorkflowExecutionSummary = {
+  name: string;
+  status: "passed" | "failed";
+  installCommand: string;
+  runCommand?: string;
+  output: string;
+};
+
+export type PullRequestWorkflowResultStatus =
+  | "available"
+  | "missing"
+  | "malformed"
+  | "not_recorded";
+
+export type BrowserPullRequestCiJobSummary = {
+  id: string;
+  status: PullRequestCiStatus;
+  branchName: string;
+  baseBranch: string;
+  commitHash: string;
+  errorMessage: string | null;
+  mergeStatus: string | null;
+  workflowResultStatus: PullRequestWorkflowResultStatus;
+  workflowResultError: string | null;
+  workflowExecutions: readonly PullRequestWorkflowExecutionSummary[];
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export type PullRequestGitHubDelegation =
+  | {
+      state: "pull_request" | "compare";
+      url: string;
+      remoteName: string;
+      repositoryUrl: string;
+      actionLabel: "Open on GitHub";
+      message: string;
+    }
+  | {
+      state: "unavailable";
+      url: null;
+      remoteName: null;
+      repositoryUrl: null;
+      actionLabel: "Open on GitHub";
+      message: string;
+    };
+
+export type BrowserPullRequestDetail = BrowserPullRequestSummary & {
+  activity: readonly PullRequestActivityEntry[];
+  ciJobs: readonly BrowserPullRequestCiJobSummary[];
+  github: PullRequestGitHubDelegation;
+};
+
 export type ListPullRequestsRequest = {
   repositoryPath: string;
   state?: PullRequestListState;
@@ -70,6 +162,16 @@ export type ListPullRequestsRequest = {
 export type ListPullRequestsResponse = {
   repositoryName: string;
   pullRequests: readonly PullRequestSummary[];
+};
+
+export type ListRepositoryPullRequestsResponse = {
+  repositoryName: string;
+  pullRequests: readonly BrowserPullRequestSummary[];
+};
+
+export type GetRepositoryPullRequestResponse = {
+  repositoryName: string;
+  pullRequest: BrowserPullRequestDetail;
 };
 
 export type EditPullRequestRequest = {

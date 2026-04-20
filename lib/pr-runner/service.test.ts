@@ -1,7 +1,8 @@
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitCommandRunner } from "@/lib/pull-requests/github";
 
 const { mockedNudgePullRequestRunner } = vi.hoisted(() => ({
   mockedNudgePullRequestRunner: vi.fn(),
@@ -11,7 +12,14 @@ vi.mock("@/lib/pr-runner/runner", () => ({
   nudgePullRequestRunner: mockedNudgePullRequestRunner,
 }));
 
-import { editPullRequest, listPullRequests, synchronizePullRequest } from "@/lib/pr-runner/service";
+import {
+  editPullRequest,
+  getRepositoryPullRequest,
+  listPullRequests,
+  listRepositoryPullRequests,
+  synchronizePullRequest,
+} from "@/lib/pr-runner/service";
+import { writeCiResultArtifact } from "@/lib/pr-runner/results";
 import { completeCiJob, readPullRequest } from "@/lib/pr-runner/storage";
 import { resetStorageCacheForTests } from "@/lib/storage/sqlite";
 import { PullRequestRequestError } from "@/lib/pr-runner/validation";
@@ -75,6 +83,174 @@ describe("listPullRequests service", () => {
         }),
       ],
     });
+  });
+});
+
+describe("listRepositoryPullRequests service", () => {
+  it("returns browser-safe repo-scoped summaries without repository paths", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    synchronizePullRequest(createSyncPayload(repositoryPath), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-20T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    const response = listRepositoryPullRequests(
+      {
+        repositoryName: "alpha",
+      },
+      {
+        cwd: workspace,
+        storage,
+      },
+    );
+
+    expect(response.pullRequests[0]).toMatchObject({
+      id: 1,
+      repositoryName: "alpha",
+      branchName: "feature/test",
+    });
+    expect(response.pullRequests[0]).not.toHaveProperty("repositoryPath");
+    expect(response.pullRequests[0]?.latestJob).not.toHaveProperty("resultPath");
+  });
+});
+
+describe("getRepositoryPullRequest service", () => {
+  it("returns repo-owned detail with activity, CI history, and GitHub delegation", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    synchronizePullRequest(createSyncPayload(repositoryPath), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-20T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    const artifactPath = writeCiResultArtifact(
+      {
+        jobId: "job-1",
+        pullRequestId: 1,
+        repositoryName: "alpha",
+        branchName: "feature/test",
+        baseBranch: "main",
+        commitHash: "abcdef1",
+        status: "succeeded",
+        queuedAt: "2026-04-20T00:00:00.000Z",
+        startedAt: "2026-04-20T00:00:05.000Z",
+        finishedAt: "2026-04-20T00:00:20.000Z",
+        errorMessage: null,
+        workflows: [
+          {
+            name: "lint",
+            status: "passed",
+            installCommand: "pnpm install",
+            runCommand: "pnpm lint",
+            output: "ok",
+          },
+        ],
+        merge: {
+          status: "succeeded",
+          message: "Fast-forwarded main to abcdef1.",
+        },
+      },
+      {
+        cwd: workspace,
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: artifactPath,
+      mergeStatus: "succeeded",
+      now: createNowFactory("2026-04-20T00:00:20.000Z"),
+      storage,
+    });
+
+    const detail = getRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+      },
+    );
+
+    expect(detail.pullRequest).toMatchObject({
+      id: 1,
+      repositoryName: "alpha",
+      latestJob: expect.objectContaining({
+        id: "job-1",
+        status: "succeeded",
+      }),
+      github: expect.objectContaining({
+        state: "compare",
+        remoteName: "upstream",
+      }),
+    });
+    expect(detail.pullRequest.activity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "created",
+        }),
+        expect.objectContaining({
+          type: "merged",
+        }),
+      ]),
+    );
+    expect(detail.pullRequest.ciJobs).toEqual([
+      expect.objectContaining({
+        id: "job-1",
+        workflowResultStatus: "available",
+        workflowExecutions: [
+          expect.objectContaining({
+            name: "lint",
+            status: "passed",
+          }),
+        ],
+      }),
+    ]);
+    expect(detail.pullRequest).not.toHaveProperty("repositoryPath");
+  });
+
+  it("rejects pull requests that belong to a different repository", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    createRepositorySkeleton(workspace, "beta");
+
+    synchronizePullRequest(createSyncPayload(repositoryPath), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-20T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    expect(() =>
+      getRepositoryPullRequest(
+        {
+          repositoryName: "beta",
+          pullRequestId: "1",
+        },
+        {
+          cwd: workspace,
+          storage,
+        },
+      ),
+    ).toThrow("No ugit pull request exists for beta:1.");
   });
 });
 
@@ -285,6 +461,10 @@ function createRepositorySkeleton(cwd: string, repositoryName: string): string {
   const repositoryPath = path.join(cwd, ".data", "repos", repositoryName);
 
   mkdirSync(path.join(repositoryPath, ".git"), { recursive: true });
+  writeFileSync(
+    path.join(repositoryPath, ".git", "config"),
+    "[core]\n\trepositoryformatversion = 0\n",
+  );
 
   return repositoryPath;
 }
@@ -356,4 +536,19 @@ function createNowFactory(...timestamps: string[]): () => Date {
 
     return new Date(timestamp);
   };
+}
+
+function createRunGitStub(
+  responses: Readonly<Record<string, string>>,
+): ReturnType<typeof vi.fn<GitCommandRunner>> {
+  return vi.fn<GitCommandRunner>((command, args) => {
+    const key = `${command} ${args.join(" ")}`;
+    const response = responses[key];
+
+    if (response === undefined) {
+      throw new Error(`Unexpected command: ${key}`);
+    }
+
+    return response;
+  });
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   configuredOwner,
+  getPullRequestHref,
   getRepositoryHref,
+  getRepositoryPullRequestsHref,
   getRepositoryWorkflowsHref,
   getWorkflowRunHref,
   isConfiguredOwner,
@@ -36,5 +38,12 @@ describe("workflow href helpers", () => {
     expect(getWorkflowRunHref("repo-x", "workflow 1")).toBe(
       "/Myriad-Dreamin/repo-x/workflows/workflow%201",
     );
+  });
+});
+
+describe("pull-request href helpers", () => {
+  it("builds canonical repository pull-request routes", () => {
+    expect(getRepositoryPullRequestsHref("repo-x")).toBe("/Myriad-Dreamin/repo-x/pull-requests");
+    expect(getPullRequestHref("repo-x", 17)).toBe("/Myriad-Dreamin/repo-x/pull-requests/17");
   });
 });

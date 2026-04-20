@@ -346,7 +346,47 @@ body {
   color: #1f6b47;
 }
 
+.workflow-run-status[data-status="passed"],
+.workflow-run-status[data-status="merged"] {
+  background: rgba(43, 122, 84, 0.16);
+  color: #1f6b47;
+}
+
 .workflow-run-status[data-status="failed"] {
+  background: rgba(166, 55, 45, 0.16);
+  color: #8d2219;
+}
+
+.workflow-run-status[data-status="merge_failed"] {
+  background: rgba(166, 55, 45, 0.16);
+  color: #8d2219;
+}
+
+.workflow-run-status[data-status="superseded"],
+.workflow-run-status[data-status="not_recorded"] {
+  background: rgba(117, 79, 36, 0.12);
+  color: var(--text-muted);
+}
+
+.workflow-run-status[data-status="created"],
+.workflow-run-status[data-status="synchronized"],
+.workflow-run-status[data-status="edited"],
+.workflow-run-status[data-status="ci_started"],
+.workflow-run-status[data-status="ci_finished"],
+.workflow-run-status[data-status="compare"] {
+  background: rgba(36, 99, 145, 0.14);
+  color: #124d73;
+}
+
+.workflow-run-status[data-status="pull_request"],
+.workflow-run-status[data-status="available"] {
+  background: rgba(43, 122, 84, 0.16);
+  color: #1f6b47;
+}
+
+.workflow-run-status[data-status="missing"],
+.workflow-run-status[data-status="malformed"],
+.workflow-run-status[data-status="unavailable"] {
   background: rgba(166, 55, 45, 0.16);
   color: #8d2219;
 }
@@ -393,6 +433,34 @@ body {
   margin-top: 22px;
 }
 
+.activity-list,
+.workflow-execution-list {
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 14px;
+}
+
+.activity-item,
+.workflow-execution-item {
+  padding: 18px;
+  border-radius: 16px;
+  background: rgba(255, 252, 247, 0.86);
+  border: 1px solid rgba(117, 79, 36, 0.14);
+}
+
+.workflow-subsection {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(117, 79, 36, 0.14);
+}
+
+.workflow-subsection h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .workflow-log-output {
   margin: 18px 0 0;
   padding: 18px;
@@ -405,6 +473,10 @@ body {
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.workflow-execution-output {
+  margin-bottom: 0;
 }
 
 .empty-state {

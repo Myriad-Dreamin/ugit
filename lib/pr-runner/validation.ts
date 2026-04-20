@@ -2,7 +2,7 @@ import "server-only";
 
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { getRepositoriesRoot } from "@/lib/repositories";
+import { getRepositoriesRoot, getRepositoryByName } from "@/lib/repositories";
 import type {
   GitPlatformPublishedBranch,
   PullRequestListState,
@@ -45,6 +45,25 @@ export type ValidatedPullRequestEditRequest = Readonly<{
   body?: string;
   baseBranch?: string;
   draft?: boolean;
+}>;
+
+export type ValidatedRepositoryPullRequestListRequest = Readonly<{
+  repositoryName: string;
+  repositoryPath: string;
+  state: PullRequestListState;
+  baseBranch?: string;
+  headBranch?: string;
+}>;
+
+export type ValidatedRepositoryPullRequestDetailRequest = Readonly<{
+  repositoryName: string;
+  repositoryPath: string;
+  pullRequestId: number;
+}>;
+
+export type ValidatedPullRequestReadRepository = Readonly<{
+  repositoryName: string;
+  repositoryPath: string;
 }>;
 
 export type ValidatePullRequestRequestOptions = Readonly<{
@@ -109,6 +128,34 @@ export function validatePullRequestListRequest(
   };
 }
 
+export function validateRepositoryPullRequestListRequest(
+  payload: unknown,
+  options: ValidatePullRequestRequestOptions = {},
+): ValidatedRepositoryPullRequestListRequest {
+  const request = asRecord(payload, "The repository pull-request query payload");
+  const repository = resolvePullRequestReadRepository(request.repositoryName, options);
+
+  return {
+    ...repository,
+    state: readPullRequestState(request.state, "state") ?? "all",
+    baseBranch: readOptionalNonEmptyString(request.baseBranch, "baseBranch"),
+    headBranch: readOptionalNonEmptyString(request.headBranch, "headBranch"),
+  };
+}
+
+export function validateRepositoryPullRequestDetailRequest(
+  payload: unknown,
+  options: ValidatePullRequestRequestOptions = {},
+): ValidatedRepositoryPullRequestDetailRequest {
+  const request = asRecord(payload, "The repository pull-request detail payload");
+  const repository = resolvePullRequestReadRepository(request.repositoryName, options);
+
+  return {
+    ...repository,
+    pullRequestId: readPositiveInteger(request.pullRequestId, "pullRequestId"),
+  };
+}
+
 export function validatePullRequestEditRequest(
   payload: unknown,
   options: ValidatePullRequestRequestOptions = {},
@@ -144,6 +191,28 @@ export function validatePullRequestEditRequest(
     body,
     baseBranch,
     draft,
+  };
+}
+
+export function resolvePullRequestReadRepository(
+  repositoryNameValue: unknown,
+  options: ValidatePullRequestRequestOptions = {},
+): ValidatedPullRequestReadRepository {
+  const repositoryName = readRequiredString(repositoryNameValue, "repositoryName");
+  const repository = getRepositoryByName(repositoryName, {
+    cwd: options.cwd,
+  });
+
+  if (!repository) {
+    throw new PullRequestRequestError(
+      `ugit repository ${repositoryName} does not exist on the server.`,
+      404,
+    );
+  }
+
+  return {
+    repositoryName: repository.name,
+    repositoryPath: repository.path,
   };
 }
 
@@ -243,6 +312,21 @@ function readPullRequestState(value: unknown, label: string): PullRequestListSta
   }
 
   throw new PullRequestRequestError(`${label} must be one of "open", "merged", or "all".`, 400);
+}
+
+function readPositiveInteger(value: unknown, label: string): number {
+  const integerValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim().length > 0
+        ? Number(value)
+        : Number.NaN;
+
+  if (!Number.isInteger(integerValue) || integerValue <= 0) {
+    throw new PullRequestRequestError(`${label} must be a positive integer.`, 400);
+  }
+
+  return integerValue;
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
