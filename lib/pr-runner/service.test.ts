@@ -208,8 +208,10 @@ describe("getRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
-          [`git -C ${repositoryPath} fetch --quiet upstream main`]: successResult(),
-          [`git -C ${repositoryPath} rev-parse --verify FETCH_HEAD`]: successResult("fedcba9\n"),
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]:
+            successResult(),
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]:
+            successResult("fedcba9\n"),
           [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]:
             successResult("fedcba9\n"),
         }),
@@ -332,8 +334,10 @@ describe("getRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
-          [`git -C ${repositoryPath} fetch --quiet upstream main`]: successResult(),
-          [`git -C ${repositoryPath} rev-parse --verify FETCH_HEAD`]: successResult("fedcba9\n"),
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]:
+            successResult(),
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]:
+            successResult("fedcba9\n"),
           [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]:
             successResult("fedcba9\n"),
         }),
@@ -490,11 +494,11 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
-          [`git -C ${repositoryPath} fetch --quiet upstream main`]: [
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
             successResult(),
             successResult(),
           ],
-          [`git -C ${repositoryPath} rev-parse --verify FETCH_HEAD`]: [
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
             successResult("base-commit\n"),
             successResult("merged-commit\n"),
           ],
@@ -636,11 +640,11 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
-          [`git -C ${repositoryPath} fetch --quiet upstream main`]: [
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
             successResult(),
             successResult(),
           ],
-          [`git -C ${repositoryPath} rev-parse --verify FETCH_HEAD`]: [
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
             successResult("base-commit\n"),
             successResult("base-commit\n"),
           ],
@@ -711,11 +715,11 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
-          [`git -C ${repositoryPath} fetch --quiet upstream main`]: [
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
             successResult(),
             successResult(),
           ],
-          [`git -C ${repositoryPath} rev-parse --verify FETCH_HEAD`]: [
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
             successResult(`${newBaseCommit}\n`),
             successResult(`${newBaseCommit}\n`),
           ],
@@ -874,11 +878,11 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
-          [`git -C ${repositoryPath} fetch --quiet upstream main`]: [
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
             successResult(),
             successResult(),
           ],
-          [`git -C ${repositoryPath} rev-parse --verify FETCH_HEAD`]: [
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
             successResult("base-commit\n"),
             successResult("base-commit\n"),
           ],

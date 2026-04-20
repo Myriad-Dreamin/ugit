@@ -105,13 +105,14 @@ export async function fetchRemoteBranchCommit(
   options: FetchRemoteBranchCommitOptions,
 ): Promise<FetchRemoteBranchCommitResult> {
   const runCommand = options.runCommand ?? runAsyncCommand;
+  const remoteTrackingRef = `refs/remotes/${options.remoteName}/${options.branchName}`;
   const fetchResult = await runCommand("git", [
     "-C",
     options.repositoryPath,
     "fetch",
     "--quiet",
     options.remoteName,
-    options.branchName,
+    `${options.branchName}:${remoteTrackingRef}`,
   ]);
 
   if (fetchResult.exitCode !== 0) {
@@ -129,7 +130,7 @@ export async function fetchRemoteBranchCommit(
     options.repositoryPath,
     "rev-parse",
     "--verify",
-    "FETCH_HEAD",
+    remoteTrackingRef,
   ]);
 
   if (headResult.exitCode !== 0) {

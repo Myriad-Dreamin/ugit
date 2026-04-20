@@ -63,10 +63,10 @@ describe("validateFastForwardPreflight", () => {
 });
 
 describe("fetchRemoteBranchCommit", () => {
-  it("fetches the latest remote base commit for parity checks", async () => {
+  it("fetches the latest remote base commit through a branch-specific tracking ref", async () => {
     const runCommand = createRunCommandStub({
-      "git -C /tmp/alpha fetch --quiet upstream main": successResult(),
-      "git -C /tmp/alpha rev-parse --verify FETCH_HEAD": successResult("fedcba9\n"),
+      "git -C /tmp/alpha fetch --quiet upstream main:refs/remotes/upstream/main": successResult(),
+      "git -C /tmp/alpha rev-parse --verify refs/remotes/upstream/main": successResult("fedcba9\n"),
     });
 
     await expect(
