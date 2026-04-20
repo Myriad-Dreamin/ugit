@@ -3,9 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  resolvePullRequestReadRepository,
   validatePullRequestEditRequest,
   validatePullRequestListRequest,
   validatePullRequestSyncRequest,
+  validateRepositoryPullRequestDetailRequest,
+  validateRepositoryPullRequestListRequest,
 } from "@/lib/pr-runner/validation";
 
 const workspaces: string[] = [];
@@ -174,6 +177,63 @@ describe("validatePullRequestEditRequest", () => {
         { cwd },
       ),
     ).toThrow("At least one editable field must be provided.");
+  });
+});
+
+describe("validateRepositoryPullRequestListRequest", () => {
+  it("resolves repository names for browser-safe list reads", () => {
+    const cwd = createWorkspace();
+
+    createRepositorySkeleton(cwd, "alpha");
+
+    expect(
+      validateRepositoryPullRequestListRequest(
+        {
+          repositoryName: "alpha",
+        },
+        { cwd },
+      ),
+    ).toEqual({
+      repositoryName: "alpha",
+      repositoryPath: path.join(cwd, ".data", "repos", "alpha"),
+      state: "all",
+      baseBranch: undefined,
+      headBranch: undefined,
+    });
+  });
+});
+
+describe("validateRepositoryPullRequestDetailRequest", () => {
+  it("resolves repository detail reads and numeric pull-request ids", () => {
+    const cwd = createWorkspace();
+
+    createRepositorySkeleton(cwd, "alpha");
+
+    expect(
+      validateRepositoryPullRequestDetailRequest(
+        {
+          repositoryName: "alpha",
+          pullRequestId: "17",
+        },
+        { cwd },
+      ),
+    ).toEqual({
+      repositoryName: "alpha",
+      repositoryPath: path.join(cwd, ".data", "repos", "alpha"),
+      pullRequestId: 17,
+    });
+  });
+});
+
+describe("resolvePullRequestReadRepository", () => {
+  it("rejects unknown repositories for repo-scoped reads", () => {
+    const cwd = createWorkspace();
+
+    expect(() =>
+      resolvePullRequestReadRepository("missing-repo", {
+        cwd,
+      }),
+    ).toThrow("ugit repository missing-repo does not exist on the server.");
   });
 });
 

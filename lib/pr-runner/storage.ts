@@ -128,11 +128,30 @@ export type QueueWorkflowRunResult = Readonly<{
 }>;
 
 export type PullRequestState = "open" | "merged";
+export type PullRequestActivityEventType =
+  | "created"
+  | "synchronized"
+  | "edited"
+  | "ci_started"
+  | "ci_finished"
+  | "merged";
 
 export type PullRequestSummaryRecord = Readonly<{
   pullRequest: PullRequestRecord;
   latestJob: CiJobRecord | null;
   state: PullRequestState;
+}>;
+
+export type PullRequestActivityEventRecord = Readonly<{
+  id: number;
+  pullRequestId: number;
+  repositoryName: string;
+  repositoryPath: string;
+  eventType: PullRequestActivityEventType;
+  title: string;
+  description: string;
+  jobId: string | null;
+  createdAt: string;
 }>;
 
 export type QueuePullRequestOptions = Readonly<{
@@ -246,6 +265,18 @@ type WorkflowRunRow = {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
+};
+
+type PullRequestActivityEventRow = {
+  id: number;
+  pull_request_id: number;
+  repository_name: string;
+  repository_path: string;
+  event_type: PullRequestActivityEventType;
+  title: string;
+  description: string;
+  job_id: string | null;
+  created_at: string;
 };
 
 type PullRequestSummaryRow = PullRequestRow & {
@@ -370,6 +401,30 @@ const MIGRATIONS: readonly StorageMigration[] = [
         UPDATE workflow_runs
         SET execution_repository_path = repository_path
         WHERE execution_repository_path IS NULL;
+      `);
+    },
+  },
+  {
+    version: 4,
+    name: "create_pull_request_events",
+    up(database) {
+      database.exec(`
+        CREATE TABLE pull_request_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          pull_request_id INTEGER NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+          repository_name TEXT NOT NULL,
+          repository_path TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL,
+          job_id TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX pull_request_events_pr_created_idx
+          ON pull_request_events(pull_request_id, created_at, id);
+        CREATE INDEX pull_request_events_repository_created_idx
+          ON pull_request_events(repository_name, created_at, id);
       `);
     },
   },
@@ -572,6 +627,19 @@ export function queuePullRequestSynchronization(
           )
           .run(jobId, "queued", now, pullRequestId);
 
+        insertPullRequestActivityEvent(transaction, {
+          pullRequestId,
+          repositoryName: request.repositoryName,
+          repositoryPath: request.repositoryPath,
+          eventType: existingPullRequest ? "synchronized" : "created",
+          title: existingPullRequest ? "Pull request synchronized" : "Pull request created",
+          description: existingPullRequest
+            ? `Synchronized ${request.pullRequest.branchName} at ${request.publishedBranch.commitHash}.`
+            : `Created ${request.pullRequest.branchName} targeting ${request.pullRequest.baseBranch}.`,
+          jobId,
+          createdAt: now,
+        });
+
         const queuePosition = countQueuedExecutionsThrough(transaction, "pull_request", jobId);
 
         return {
@@ -737,6 +805,17 @@ export function claimRunnableJobs(options: ClaimRunnableJobsOptions = {}): reado
             )
             .run("running", now, job.pull_request_id);
 
+          insertPullRequestActivityEvent(transaction, {
+            pullRequestId: job.pull_request_id,
+            repositoryName: job.repository_name,
+            repositoryPath: job.repository_path,
+            eventType: "ci_started",
+            title: "CI job started",
+            description: `Started CI job ${job.id} for ${job.branch_name}.`,
+            jobId: job.id,
+            createdAt: now,
+          });
+
           claimedJobs.push({
             id: job.id,
             pullRequestId: job.pull_request_id,
@@ -819,6 +898,17 @@ export function claimRunnableExecutions(
                 `,
               )
               .run("running", timestamp, execution.pull_request_id);
+
+            insertPullRequestActivityEvent(transaction, {
+              pullRequestId: execution.pull_request_id,
+              repositoryName: execution.repository_name,
+              repositoryPath: execution.repository_path,
+              eventType: "ci_started",
+              title: "CI job started",
+              description: `Started CI job ${execution.id} for ${execution.branch_name}.`,
+              jobId: execution.id,
+              createdAt: timestamp,
+            });
 
             claimedExecutions.push({
               kind: "pull_request",
@@ -1044,6 +1134,17 @@ export function completeCiJob(options: CompleteCiJobOptions): CiJobRecord {
           )
           .run(jobStatus, resultPath, errorMessage, mergeStatus, now, now, options.jobId);
 
+        insertPullRequestActivityEvent(transaction, {
+          pullRequestId: job.pullRequestId,
+          repositoryName: job.repositoryName,
+          repositoryPath: job.repositoryPath,
+          eventType: "ci_finished",
+          title: "CI job finished",
+          description: `Finished CI job ${job.id} with status ${jobStatus}.`,
+          jobId: job.id,
+          createdAt: now,
+        });
+
         if (!shouldSupersedeJob) {
           transaction
             .prepare<[PullRequestStatus, string, number]>(
@@ -1054,6 +1155,19 @@ export function completeCiJob(options: CompleteCiJobOptions): CiJobRecord {
               `,
             )
             .run(mapJobStatusToPullRequestStatus(options.status), now, job.pullRequestId);
+
+          if (options.status === "succeeded" && mergeStatus === "succeeded") {
+            insertPullRequestActivityEvent(transaction, {
+              pullRequestId: job.pullRequestId,
+              repositoryName: job.repositoryName,
+              repositoryPath: job.repositoryPath,
+              eventType: "merged",
+              title: "Pull request merged",
+              description: `Merged ${job.branchName} into ${job.baseBranch}.`,
+              jobId: job.id,
+              createdAt: now,
+            });
+          }
         }
 
         return readCiJobById(transaction, options.jobId)!;
@@ -1170,62 +1284,137 @@ export function listWorkflowRuns(
   });
 }
 
+export function readPullRequestForRepository(
+  repositoryName: string,
+  pullRequestId: number,
+  storage: StorageOptions | string | undefined = undefined,
+): PullRequestRecord | null {
+  ensurePullRequestStorage(storage);
+
+  return withStorage(storage, (database) =>
+    readPullRequestByRepository(database, repositoryName, pullRequestId),
+  );
+}
+
+export function listPullRequestsForRepository(
+  repositoryName: string,
+  options: ListPullRequestsOptions = {},
+): readonly PullRequestSummaryRecord[] {
+  ensurePullRequestStorage(options.storage);
+
+  return withStorage(options.storage, (database) =>
+    listPullRequestSummaryRecords(database, "pull_requests.repository_name = ?", repositoryName, {
+      state: options.state,
+      baseBranch: options.baseBranch,
+      headBranch: options.headBranch,
+    }),
+  );
+}
+
 export function listPullRequests(
   repositoryPath: string,
   options: ListPullRequestsOptions = {},
 ): readonly PullRequestSummaryRecord[] {
   ensurePullRequestStorage(options.storage);
 
+  return withStorage(options.storage, (database) =>
+    listPullRequestSummaryRecords(database, "pull_requests.repository_path = ?", repositoryPath, {
+      state: options.state,
+      baseBranch: options.baseBranch,
+      headBranch: options.headBranch,
+    }),
+  );
+}
+
+export function listCiJobsForPullRequest(
+  pullRequestId: number,
+  options: Readonly<{
+    repositoryName?: string;
+    storage?: StorageOptions | string;
+  }> = {},
+): readonly CiJobRecord[] {
+  ensurePullRequestStorage(options.storage);
+
   return withStorage(options.storage, (database) => {
-    const filters = ["pull_requests.repository_path = ?"];
-    const parameters: Array<string> = [repositoryPath];
+    const filters = ["pull_request_id = ?"];
+    const parameters: Array<string | number> = [pullRequestId];
 
-    if (options.state === "open") {
-      filters.push("pull_requests.status <> 'merged'");
-    } else if (options.state === "merged") {
-      filters.push("pull_requests.status = 'merged'");
+    if (options.repositoryName) {
+      filters.push("repository_name = ?");
+      parameters.push(options.repositoryName);
     }
 
-    if (options.baseBranch) {
-      filters.push("pull_requests.base_branch = ?");
-      parameters.push(options.baseBranch);
-    }
-
-    if (options.headBranch) {
-      filters.push("pull_requests.branch_name = ?");
-      parameters.push(options.headBranch);
-    }
-
-    const rows = database
-      .prepare<string[], PullRequestSummaryRow>(
+    return database
+      .prepare<Array<string | number>, CiJobRow>(
         `
-          SELECT
-            pull_requests.*,
-            ci_jobs.id AS ci_job_id,
-            ci_jobs.pull_request_id AS ci_pull_request_id,
-            ci_jobs.repository_name AS ci_repository_name,
-            ci_jobs.repository_path AS ci_repository_path,
-            ci_jobs.branch_name AS ci_branch_name,
-            ci_jobs.base_branch AS ci_base_branch,
-            ci_jobs.commit_hash AS ci_commit_hash,
-            ci_jobs.remote_name AS ci_remote_name,
-            ci_jobs.status AS ci_status,
-            ci_jobs.result_path AS ci_result_path,
-            ci_jobs.error_message AS ci_error_message,
-            ci_jobs.merge_status AS ci_merge_status,
-            ci_jobs.created_at AS ci_created_at,
-            ci_jobs.updated_at AS ci_updated_at,
-            ci_jobs.started_at AS ci_started_at,
-            ci_jobs.finished_at AS ci_finished_at
-          FROM pull_requests
-          LEFT JOIN ci_jobs ON ci_jobs.id = pull_requests.latest_job_id
+          SELECT *
+          FROM ci_jobs
           WHERE ${filters.join(" AND ")}
-          ORDER BY pull_requests.updated_at DESC, pull_requests.id DESC
+          ORDER BY created_at DESC, id DESC
         `,
       )
-      .all(...parameters);
+      .all(...parameters)
+      .map(toCiJobRecord);
+  });
+}
 
-    return rows.map(toPullRequestSummaryRecord);
+export function listPullRequestActivityEvents(
+  pullRequestId: number,
+  options: Readonly<{
+    repositoryName?: string;
+    storage?: StorageOptions | string;
+  }> = {},
+): readonly PullRequestActivityEventRecord[] {
+  ensurePullRequestStorage(options.storage);
+
+  return withStorage(options.storage, (database) => {
+    const filters = ["pull_request_id = ?"];
+    const parameters: Array<string | number> = [pullRequestId];
+
+    if (options.repositoryName) {
+      filters.push("repository_name = ?");
+      parameters.push(options.repositoryName);
+    }
+
+    return database
+      .prepare<Array<string | number>, PullRequestActivityEventRow>(
+        `
+          SELECT *
+          FROM pull_request_events
+          WHERE ${filters.join(" AND ")}
+          ORDER BY created_at ASC, id ASC
+        `,
+      )
+      .all(...parameters)
+      .map(toPullRequestActivityEventRecord);
+  });
+}
+
+export function appendPullRequestActivityEvent(
+  event: Readonly<{
+    pullRequestId: number;
+    repositoryName: string;
+    repositoryPath: string;
+    eventType: PullRequestActivityEventType;
+    title: string;
+    description: string;
+    jobId: string | null;
+  }>,
+  options: Readonly<{
+    now?: () => Date;
+    storage?: StorageOptions | string;
+  }> = {},
+): PullRequestActivityEventRecord {
+  ensurePullRequestStorage(options.storage);
+
+  return withStorage(options.storage, (database) => {
+    const createdAt = (options.now ?? (() => new Date()))().toISOString();
+    const eventId = insertPullRequestActivityEvent(database, {
+      ...event,
+      createdAt,
+    });
+
+    return readPullRequestActivityEventById(database, eventId)!;
   });
 }
 
@@ -1278,6 +1467,22 @@ export function updatePullRequest(
       options,
     );
 
+    appendPullRequestActivityEvent(
+      {
+        pullRequestId: queued.pullRequest.id,
+        repositoryName: queued.pullRequest.repositoryName,
+        repositoryPath: queued.pullRequest.repositoryPath,
+        eventType: "edited",
+        title: "Pull request edited",
+        description: `Retargeted ${queued.pullRequest.branchName} to ${queued.pullRequest.baseBranch}.`,
+        jobId: queued.job.id,
+      },
+      {
+        now: options.now,
+        storage: options.storage,
+      },
+    );
+
     return {
       pullRequest: queued.pullRequest,
       latestJob: queued.job,
@@ -1306,6 +1511,17 @@ export function updatePullRequest(
             `,
           )
           .run(nextTitle, nextBody, nextBaseBranch, nextDraft ? 1 : 0, now, existingPullRequest.id);
+
+        insertPullRequestActivityEvent(transaction, {
+          pullRequestId: existingPullRequest.id,
+          repositoryName: existingPullRequest.repositoryName,
+          repositoryPath: existingPullRequest.repositoryPath,
+          eventType: "edited",
+          title: "Pull request edited",
+          description: "Updated pull-request metadata.",
+          jobId: null,
+          createdAt: now,
+        });
 
         const pullRequest = readPullRequestById(transaction, existingPullRequest.id)!;
         const latestJob = pullRequest.latestJobId
@@ -1378,6 +1594,67 @@ function buildSupersededCiJobMessage(errorMessage: string | null | undefined): s
   return `${SUPERSEDED_CI_JOB_MESSAGE}\n${errorMessage}`;
 }
 
+function listPullRequestSummaryRecords(
+  database: DatabaseSync,
+  identityFilter: string,
+  identityValue: string,
+  options: Readonly<{
+    state?: PullRequestState | "all";
+    baseBranch?: string;
+    headBranch?: string;
+  }>,
+): readonly PullRequestSummaryRecord[] {
+  const filters = [identityFilter];
+  const parameters: string[] = [identityValue];
+
+  if (options.state === "open") {
+    filters.push("pull_requests.status <> 'merged'");
+  } else if (options.state === "merged") {
+    filters.push("pull_requests.status = 'merged'");
+  }
+
+  if (options.baseBranch) {
+    filters.push("pull_requests.base_branch = ?");
+    parameters.push(options.baseBranch);
+  }
+
+  if (options.headBranch) {
+    filters.push("pull_requests.branch_name = ?");
+    parameters.push(options.headBranch);
+  }
+
+  const rows = database
+    .prepare<string[], PullRequestSummaryRow>(
+      `
+        SELECT
+          pull_requests.*,
+          ci_jobs.id AS ci_job_id,
+          ci_jobs.pull_request_id AS ci_pull_request_id,
+          ci_jobs.repository_name AS ci_repository_name,
+          ci_jobs.repository_path AS ci_repository_path,
+          ci_jobs.branch_name AS ci_branch_name,
+          ci_jobs.base_branch AS ci_base_branch,
+          ci_jobs.commit_hash AS ci_commit_hash,
+          ci_jobs.remote_name AS ci_remote_name,
+          ci_jobs.status AS ci_status,
+          ci_jobs.result_path AS ci_result_path,
+          ci_jobs.error_message AS ci_error_message,
+          ci_jobs.merge_status AS ci_merge_status,
+          ci_jobs.created_at AS ci_created_at,
+          ci_jobs.updated_at AS ci_updated_at,
+          ci_jobs.started_at AS ci_started_at,
+          ci_jobs.finished_at AS ci_finished_at
+        FROM pull_requests
+        LEFT JOIN ci_jobs ON ci_jobs.id = pull_requests.latest_job_id
+        WHERE ${filters.join(" AND ")}
+        ORDER BY pull_requests.updated_at DESC, pull_requests.id DESC
+      `,
+    )
+    .all(...parameters);
+
+  return rows.map(toPullRequestSummaryRecord);
+}
+
 function readPullRequestByRepositoryBranch(
   database: DatabaseSync,
   repositoryPath: string,
@@ -1392,6 +1669,24 @@ function readPullRequestByRepositoryBranch(
       `,
     )
     .get(repositoryPath, branchName);
+
+  return row ? toPullRequestRecord(row) : null;
+}
+
+function readPullRequestByRepository(
+  database: DatabaseSync,
+  repositoryName: string,
+  pullRequestId: number,
+): PullRequestRecord | null {
+  const row = database
+    .prepare<[string, number], PullRequestRow>(
+      `
+        SELECT *
+        FROM pull_requests
+        WHERE repository_name = ? AND id = ?
+      `,
+    )
+    .get(repositoryName, pullRequestId);
 
   return row ? toPullRequestRecord(row) : null;
 }
@@ -1425,6 +1720,68 @@ function readCiJobById(database: DatabaseSync, jobId: string): CiJobRecord | nul
     .get(jobId);
 
   return row ? toCiJobRecord(row) : null;
+}
+
+function insertPullRequestActivityEvent(
+  database: DatabaseSync,
+  event: Readonly<{
+    pullRequestId: number;
+    repositoryName: string;
+    repositoryPath: string;
+    eventType: PullRequestActivityEventType;
+    title: string;
+    description: string;
+    jobId: string | null;
+    createdAt: string;
+  }>,
+): number {
+  const insertedEvent = database
+    .prepare<
+      [number, string, string, PullRequestActivityEventType, string, string, string | null, string]
+    >(
+      `
+        INSERT INTO pull_request_events (
+          pull_request_id,
+          repository_name,
+          repository_path,
+          event_type,
+          title,
+          description,
+          job_id,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      event.pullRequestId,
+      event.repositoryName,
+      event.repositoryPath,
+      event.eventType,
+      event.title,
+      event.description,
+      event.jobId,
+      event.createdAt,
+    );
+
+  return Number(insertedEvent.lastInsertRowid);
+}
+
+function readPullRequestActivityEventById(
+  database: DatabaseSync,
+  eventId: number,
+): PullRequestActivityEventRecord | null {
+  const row = database
+    .prepare<[number], PullRequestActivityEventRow>(
+      `
+        SELECT *
+        FROM pull_request_events
+        WHERE id = ?
+      `,
+    )
+    .get(eventId);
+
+  return row ? toPullRequestActivityEventRecord(row) : null;
 }
 
 function readWorkflowRunById(database: DatabaseSync, workflowId: string): WorkflowRunRecord | null {
@@ -1616,6 +1973,22 @@ function toSummaryCiJobRecord(row: PullRequestSummaryRow): CiJobRecord | null {
     updatedAt: row.ci_updated_at!,
     startedAt: row.ci_started_at,
     finishedAt: row.ci_finished_at,
+  };
+}
+
+function toPullRequestActivityEventRecord(
+  row: PullRequestActivityEventRow,
+): PullRequestActivityEventRecord {
+  return {
+    id: row.id,
+    pullRequestId: row.pull_request_id,
+    repositoryName: row.repository_name,
+    repositoryPath: row.repository_path,
+    eventType: row.event_type,
+    title: row.title,
+    description: row.description,
+    jobId: row.job_id,
+    createdAt: row.created_at,
   };
 }
 

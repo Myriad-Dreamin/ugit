@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import {
   configuredOwner,
   getRepositoryHref,
+  getRepositoryPullRequestsHref,
   getRepositoryWorkflowsHref,
   isConfiguredOwner,
 } from "@/lib/owner";
@@ -34,6 +35,7 @@ export default async function RepositoryPage({ params }: RepositoryPageProps) {
 
   const entries = listRepositoryRootEntries(repository);
   const repositoryHref = getRepositoryHref(repository.name);
+  const repositoryPullRequestsHref = getRepositoryPullRequestsHref(repository.name);
   const repositoryWorkflowsHref = getRepositoryWorkflowsHref(repository.name);
 
   return (
@@ -43,6 +45,11 @@ export default async function RepositoryPage({ params }: RepositoryPageProps) {
         <p className="page-link-row">
           <Link href="/" className="page-link">
             Back to repositories
+          </Link>
+        </p>
+        <p className="page-link-row">
+          <Link href={repositoryPullRequestsHref} className="page-link">
+            View pull requests
           </Link>
         </p>
         <p className="page-link-row">

@@ -13,6 +13,7 @@ vi.mock("@/lib/owner", () => ({
     username: "Myriad-Dreamin",
   },
   getRepositoryHref: vi.fn(),
+  getRepositoryPullRequestsHref: vi.fn(),
   getRepositoryWorkflowsHref: vi.fn(),
   isConfiguredOwner: vi.fn(),
 }));
@@ -23,13 +24,19 @@ vi.mock("@/lib/repositories", () => ({
 }));
 
 import RepositoryPage from "@/app/[user]/[repo]/page";
-import { getRepositoryHref, getRepositoryWorkflowsHref, isConfiguredOwner } from "@/lib/owner";
+import {
+  getRepositoryHref,
+  getRepositoryPullRequestsHref,
+  getRepositoryWorkflowsHref,
+  isConfiguredOwner,
+} from "@/lib/owner";
 import { getRepositoryByName, listRepositoryRootEntries } from "@/lib/repositories";
 import { notFound } from "next/navigation";
 
 const mockedNotFound = vi.mocked(notFound);
 const mockedGetRepositoryByName = vi.mocked(getRepositoryByName);
 const mockedGetRepositoryHref = vi.mocked(getRepositoryHref);
+const mockedGetRepositoryPullRequestsHref = vi.mocked(getRepositoryPullRequestsHref);
 const mockedGetRepositoryWorkflowsHref = vi.mocked(getRepositoryWorkflowsHref);
 const mockedIsConfiguredOwner = vi.mocked(isConfiguredOwner);
 const mockedListRepositoryRootEntries = vi.mocked(listRepositoryRootEntries);
@@ -45,6 +52,10 @@ describe("RepositoryPage", () => {
     mockedGetRepositoryHref.mockReset();
     mockedGetRepositoryHref.mockImplementation((repositoryName) => {
       return `/Myriad-Dreamin/${repositoryName}`;
+    });
+    mockedGetRepositoryPullRequestsHref.mockReset();
+    mockedGetRepositoryPullRequestsHref.mockImplementation((repositoryName) => {
+      return `/Myriad-Dreamin/${repositoryName}/pull-requests`;
     });
     mockedGetRepositoryWorkflowsHref.mockReset();
     mockedGetRepositoryWorkflowsHref.mockImplementation((repositoryName) => {
@@ -119,6 +130,7 @@ describe("RepositoryPage", () => {
     expect(mockedGetRepositoryByName).toHaveBeenCalledWith("example-repo");
     expect(mockedListRepositoryRootEntries).toHaveBeenCalledWith(repository);
     expect(mockedGetRepositoryHref).toHaveBeenCalledWith("example-repo");
+    expect(mockedGetRepositoryPullRequestsHref).toHaveBeenCalledWith("example-repo");
     expect(mockedGetRepositoryWorkflowsHref).toHaveBeenCalledWith("example-repo");
   });
 });

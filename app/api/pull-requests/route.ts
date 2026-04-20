@@ -1,4 +1,8 @@
-import { editPullRequest, listPullRequests } from "@/lib/pr-runner/service";
+import {
+  editPullRequest,
+  listPullRequests,
+  listRepositoryPullRequests,
+} from "@/lib/pr-runner/service";
 import { PullRequestRequestError } from "@/lib/pr-runner/validation";
 
 export const dynamic = "force-dynamic";
@@ -6,14 +10,26 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
-    const response = listPullRequests({
-      repositoryPath: url.searchParams.get("repositoryPath"),
-      state: url.searchParams.get("state"),
-      baseBranch: url.searchParams.get("baseBranch"),
-      headBranch: url.searchParams.get("headBranch"),
-    });
+    const repositoryName = url.searchParams.get("repositoryName");
+    const response = repositoryName
+      ? listRepositoryPullRequests({
+          repositoryName,
+          state: url.searchParams.get("state"),
+          baseBranch: url.searchParams.get("baseBranch"),
+          headBranch: url.searchParams.get("headBranch"),
+        })
+      : listPullRequests({
+          repositoryPath: url.searchParams.get("repositoryPath"),
+          state: url.searchParams.get("state"),
+          baseBranch: url.searchParams.get("baseBranch"),
+          headBranch: url.searchParams.get("headBranch"),
+        });
 
-    return Response.json(response);
+    return Response.json(response, {
+      headers: {
+        "cache-control": "no-store",
+      },
+    });
   } catch (error) {
     if (error instanceof PullRequestRequestError) {
       return Response.json(

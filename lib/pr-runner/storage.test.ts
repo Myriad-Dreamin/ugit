@@ -6,10 +6,13 @@ import {
   SUPERSEDED_CI_JOB_MESSAGE,
   claimRunnableJobs,
   completeCiJob,
+  listPullRequestActivityEvents,
   listPullRequests,
+  listPullRequestsForRepository,
   queuePullRequestSynchronization,
   readCiJob,
   readPullRequest,
+  readPullRequestForRepository,
   requeueRunningJobs,
   selectRunnableJobs,
   updatePullRequest,
@@ -238,6 +241,80 @@ describe("listPullRequests", () => {
         pullRequest: expect.objectContaining({
           branchName: "feature/open",
         }),
+      }),
+    ]);
+  });
+});
+
+describe("repo-scoped pull-request reads", () => {
+  it("lists and reads pull requests by repository name", () => {
+    const workspace = createWorkspace();
+    const alphaRepositoryPath = path.join(workspace, "repos", "alpha");
+    const betaRepositoryPath = path.join(workspace, "repos", "beta");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queuePullRequestSynchronization(createRequest(alphaRepositoryPath, "abcdef1"), {
+      storage,
+      now: createNowFactory("2026-04-20T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+    queuePullRequestSynchronization(createRequest(betaRepositoryPath, "abcdef2"), {
+      storage,
+      now: createNowFactory("2026-04-20T00:00:10.000Z"),
+      jobIdFactory: createJobIdFactory("job-2"),
+    });
+
+    expect(listPullRequestsForRepository("alpha", { storage })).toEqual([
+      expect.objectContaining({
+        pullRequest: expect.objectContaining({
+          repositoryName: "alpha",
+        }),
+      }),
+    ]);
+    expect(readPullRequestForRepository("alpha", 1, storage)).toMatchObject({
+      id: 1,
+      repositoryName: "alpha",
+    });
+    expect(readPullRequestForRepository("beta", 1, storage)).toBeNull();
+  });
+});
+
+describe("pull-request activity events", () => {
+  it("records ordered create, start, finish, and merge transitions", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = path.join(workspace, "repos", "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+
+    queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef1"), {
+      storage,
+      now: createNowFactory("2026-04-20T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+    claimRunnableJobs({
+      storage,
+      now: createNowFactory("2026-04-20T00:00:05.000Z"),
+    });
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "succeeded",
+      now: createNowFactory("2026-04-20T00:00:20.000Z"),
+      storage,
+    });
+
+    expect(listPullRequestActivityEvents(1, { repositoryName: "alpha", storage })).toEqual([
+      expect.objectContaining({
+        eventType: "created",
+      }),
+      expect.objectContaining({
+        eventType: "ci_started",
+      }),
+      expect.objectContaining({
+        eventType: "ci_finished",
+      }),
+      expect.objectContaining({
+        eventType: "merged",
       }),
     ]);
   });
