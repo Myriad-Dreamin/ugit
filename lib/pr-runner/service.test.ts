@@ -290,6 +290,103 @@ describe("getRepositoryPullRequest service", () => {
     expect(detail.pullRequest).not.toHaveProperty("repositoryPath");
   });
 
+  it("marks readiness blocked when the canonical GitHub head drifts past the passing CI commit", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const githubHeadCommit = "github-head-commit";
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-20T01:00:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-20T01:00:20.000Z"),
+      storage,
+    });
+
+    const detail = await getRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main`]: successResult(),
+          [`git -C ${repositoryPath} rev-parse --verify FETCH_HEAD`]: successResult("fedcba9\n"),
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]:
+            successResult("fedcba9\n"),
+        }),
+        fetchImpl: createGitHubFetchSequence([
+          Response.json([
+            {
+              number: 7,
+              html_url: "https://github.com/acme/alpha/pull/7",
+            },
+          ]),
+          Response.json({
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+            mergeable: true,
+            head: {
+              ref: "feature/test",
+              sha: githubHeadCommit,
+            },
+            base: {
+              ref: "main",
+              sha: "fedcba9",
+            },
+          }),
+        ]),
+        githubToken: "token",
+      },
+    );
+
+    expect(detail.pullRequest.mergeReadiness).toMatchObject({
+      state: "blocked",
+      canMerge: false,
+      summary: expect.stringContaining(githubHeadCommit),
+      blockingReasons: [expect.stringContaining(githubHeadCommit)],
+    });
+    expect(detail.pullRequest.mergeReadiness.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "current_ci",
+          state: "blocked",
+          message: expect.stringContaining(githubHeadCommit),
+        }),
+        expect.objectContaining({
+          id: "base_parity",
+          state: "ready",
+        }),
+        expect.objectContaining({
+          id: "github_mergeability",
+          state: "ready",
+        }),
+      ]),
+    );
+  });
+
   it("rejects pull requests that belong to a different repository", async () => {
     const workspace = createWorkspace();
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
@@ -540,6 +637,134 @@ describe("mergeRepositoryPullRequest service", () => {
     expect(response.outcome).toBe("rebase_required");
     expect(response.message).toContain("rebase the pull request and rerun CI before merging");
     expect(response.pullRequest.status).toBe("passed");
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "passed",
+    });
+  });
+
+  it("refuses approval when the canonical GitHub pull request head differs from the passing CI commit", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const githubHeadCommit = "github-head-commit";
+    const githubResponses = [
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: githubHeadCommit,
+        },
+        base: {
+          ref: "main",
+          sha: "base-commit",
+        },
+      }),
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: githubHeadCommit,
+        },
+        base: {
+          ref: "main",
+          sha: "base-commit",
+        },
+      }),
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      if ((init?.method ?? "GET") !== "GET") {
+        throw new Error("GitHub merge should not run when the canonical head is stale.");
+      }
+
+      const response = githubResponses.shift();
+
+      if (!response) {
+        throw new Error("Unexpected extra GitHub request.");
+      }
+
+      return response;
+    });
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T02:00:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T02:00:20.000Z"),
+      storage,
+    });
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main`]: [
+            successResult(),
+            successResult(),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify FETCH_HEAD`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+        }),
+        fetchImpl,
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("not_ready");
+    expect(response.message).toContain(githubHeadCommit);
+    expect(response.pullRequest.status).toBe("passed");
+    expect(response.pullRequest.mergeReadiness).toMatchObject({
+      state: "blocked",
+      canMerge: false,
+      summary: expect.stringContaining(githubHeadCommit),
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
     expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
       status: "passed",
     });

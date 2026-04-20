@@ -78,17 +78,11 @@ export async function evaluatePullRequestMergeReadiness(
     };
   }
 
-  const ciCheck = buildCurrentCiCheck(options.pullRequest, options.latestJob);
   const githubRepository = resolveGitHubRepositoryContext(
     options.pullRequest.repositoryPath,
     options.pullRequest.remoteName,
     options.runGit,
   );
-  const baseParityCheck = await buildBaseParityCheck({
-    pullRequest: options.pullRequest,
-    githubRepository,
-    runCommand: options.runCommand,
-  });
   const canonicalPullRequestResult = await readCanonicalGitHubPullRequest({
     repositoryPath: options.pullRequest.repositoryPath,
     branchName: options.pullRequest.branchName,
@@ -99,6 +93,16 @@ export async function evaluatePullRequestMergeReadiness(
     fetchImpl: options.fetchImpl,
     token: options.githubToken,
   });
+  const baseParityCheck = await buildBaseParityCheck({
+    pullRequest: options.pullRequest,
+    githubRepository,
+    runCommand: options.runCommand,
+  });
+  const canonicalPullRequest =
+    canonicalPullRequestResult.status === "available"
+      ? canonicalPullRequestResult.pullRequest
+      : null;
+  const ciCheck = buildCurrentCiCheck(options.pullRequest, options.latestJob, canonicalPullRequest);
   const githubMergeabilityCheck = buildGitHubMergeabilityCheck(canonicalPullRequestResult);
 
   const checks = [ciCheck, baseParityCheck, githubMergeabilityCheck];
@@ -107,10 +111,6 @@ export async function evaluatePullRequestMergeReadiness(
     .map((check) => check.message);
   const hasPendingChecks = checks.some((check) => check.state === "pending");
   const state = blockingReasons.length > 0 ? "blocked" : hasPendingChecks ? "pending" : "ready";
-  const canonicalPullRequest =
-    canonicalPullRequestResult.status === "available"
-      ? canonicalPullRequestResult.pullRequest
-      : null;
   const github =
     canonicalPullRequest && githubRepository
       ? buildPullRequestGitHubDelegation({
@@ -147,6 +147,19 @@ export async function executeApprovedPullRequestMerge(
   }> &
     ManualMergeSharedOptions,
 ): Promise<ExecuteApprovedPullRequestMergeResult> {
+  const currentCiBlockingReason = resolveCurrentCiBlockingReason(
+    options.pullRequest,
+    options.latestJob,
+    options.canonicalPullRequest,
+  );
+
+  if (currentCiBlockingReason) {
+    return {
+      outcome: "not_ready",
+      message: currentCiBlockingReason,
+    };
+  }
+
   const preflight = await validateFastForwardPreflight({
     repositoryPath: options.pullRequest.repositoryPath,
     baseBranch: options.pullRequest.baseBranch,
@@ -227,44 +240,32 @@ export async function executeApprovedPullRequestMerge(
 function buildCurrentCiCheck(
   pullRequest: PullRequestRecord,
   latestJob: CiJobRecord | null,
+  canonicalPullRequest: CanonicalGitHubPullRequest | null,
 ): PullRequestMergeReadinessCheck {
-  if (
-    latestJob &&
-    latestJob.status === "succeeded" &&
-    latestJob.commitHash === pullRequest.headCommitHash
-  ) {
+  const blockingReason = resolveCurrentCiBlockingReason(
+    pullRequest,
+    latestJob,
+    canonicalPullRequest,
+  );
+
+  if (blockingReason) {
     return {
       id: "current_ci",
       label: "Current CI",
-      state: "ready",
-      message: `The latest CI job ${latestJob.id} succeeded for ${pullRequest.headCommitHash}.`,
+      state: "blocked",
+      message: blockingReason,
     };
   }
 
   if (!latestJob) {
-    return {
-      id: "current_ci",
-      label: "Current CI",
-      state: "blocked",
-      message: "No CI job is available for the current head commit.",
-    };
-  }
-
-  if (latestJob.commitHash !== pullRequest.headCommitHash) {
-    return {
-      id: "current_ci",
-      label: "Current CI",
-      state: "blocked",
-      message:
-        "The latest CI result no longer matches the current head commit. Refresh and rerun CI.",
-    };
+    throw new Error("A ready current CI check requires the latest CI job.");
   }
 
   return {
     id: "current_ci",
     label: "Current CI",
-    state: "blocked",
-    message: `The latest CI job ${latestJob.id} finished with status ${latestJob.status}. Wait for a passing run before merging.`,
+    state: "ready",
+    message: `The latest CI job ${latestJob.id} succeeded for ${pullRequest.headCommitHash}.`,
   };
 }
 
@@ -383,6 +384,30 @@ function buildMergeReadinessSummary(
   }
 
   return blockingReasons[0] ?? "Resolve the blocked checks before merging.";
+}
+
+function resolveCurrentCiBlockingReason(
+  pullRequest: PullRequestRecord,
+  latestJob: CiJobRecord | null,
+  canonicalPullRequest: CanonicalGitHubPullRequest | null,
+): string | null {
+  if (!latestJob) {
+    return "No CI job is available for the current head commit.";
+  }
+
+  if (latestJob.commitHash !== pullRequest.headCommitHash) {
+    return "The latest CI result no longer matches the current head commit. Refresh and rerun CI.";
+  }
+
+  if (latestJob.status !== "succeeded") {
+    return `The latest CI job ${latestJob.id} finished with status ${latestJob.status}. Wait for a passing run before merging.`;
+  }
+
+  if (canonicalPullRequest && canonicalPullRequest.headCommitHash !== pullRequest.headCommitHash) {
+    return `GitHub pull request #${canonicalPullRequest.number} now points at ${canonicalPullRequest.headCommitHash}, but the latest passing CI job ${latestJob.id} only covers ${latestJob.commitHash}. Refresh and rerun CI before merging.`;
+  }
+
+  return null;
 }
 
 async function readLocalBranchCommit(
