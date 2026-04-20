@@ -2,7 +2,6 @@ import "server-only";
 
 import type { StorageOptions } from "@/lib/storage/sqlite";
 import { appendWorkflowRunLog } from "@/lib/workflow-runs/log-storage";
-import { attemptFastForwardMerge } from "./merge";
 import { runAsyncCommand, type AsyncCommandRunner } from "./process";
 import { writeCiResultArtifact, type CiResultArtifact } from "./results";
 import {
@@ -82,27 +81,20 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
     }
 
     const mergeResult = workflowSummary.success
-      ? await attemptFastForwardMerge({
-          repositoryPath: job.repositoryPath,
-          baseBranch: job.baseBranch,
-          commitHash: job.commitHash,
-          canMutate: () => isLatestCiJob(job.id, options.storage),
-          runCommand,
-        })
+      ? {
+          status: "skipped" as const,
+          message: "Manual approval is required before this pull request can merge.",
+        }
       : {
           status: "skipped" as const,
-          message: "Skipped auto-merge because at least one workflow failed.",
+          message: "Skipped merge because at least one workflow failed.",
         };
 
     if (markJobSupersededIfStale(job, options, SUPERSEDED_CI_JOB_MESSAGE)) {
       return;
     }
 
-    const status = !workflowSummary.success
-      ? "failed"
-      : mergeResult.status === "succeeded"
-        ? "succeeded"
-        : "merge_failed";
+    const status = workflowSummary.success ? "succeeded" : "failed";
 
     resultArtifact = {
       jobId: job.id,
@@ -115,8 +107,7 @@ export async function executeCiJob(job: ClaimedCiJob, options: RunnerOptions = {
       queuedAt: job.createdAt,
       startedAt: job.startedAt,
       finishedAt: now().toISOString(),
-      errorMessage:
-        workflowSummary.failureMessage ?? (status === "merge_failed" ? mergeResult.message : null),
+      errorMessage: workflowSummary.failureMessage ?? null,
       workflows: workflowSummary.workflows,
       merge: mergeResult,
     };

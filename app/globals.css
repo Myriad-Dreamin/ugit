@@ -368,6 +368,21 @@ body {
   color: var(--text-muted);
 }
 
+.workflow-run-status[data-status="ready"] {
+  background: rgba(43, 122, 84, 0.16);
+  color: #1f6b47;
+}
+
+.workflow-run-status[data-status="pending"] {
+  background: rgba(189, 126, 44, 0.16);
+  color: #8b4e0d;
+}
+
+.workflow-run-status[data-status="blocked"] {
+  background: rgba(166, 55, 45, 0.16);
+  color: #8d2219;
+}
+
 .workflow-run-status[data-status="created"],
 .workflow-run-status[data-status="synchronized"],
 .workflow-run-status[data-status="edited"],
@@ -483,6 +498,42 @@ body {
   margin: 18px 0 0;
   color: var(--text-muted);
   font-size: 0.95rem;
+}
+
+.merge-action-row {
+  margin-top: 18px;
+}
+
+.page-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid rgba(165, 73, 22, 0.24);
+  border-radius: 999px;
+  background: rgba(165, 73, 22, 0.1);
+  color: var(--accent);
+  font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    opacity 120ms ease;
+}
+
+.page-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(165, 73, 22, 0.36);
+  box-shadow: 0 16px 28px rgba(84, 49, 18, 0.1);
+}
+
+.page-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 @media (max-width: 640px) {

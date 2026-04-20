@@ -1,23 +1,24 @@
 import "server-only";
 
 import type { StorageOptions } from "@/lib/storage/sqlite";
-import {
-  buildPullRequestGitHubDelegation,
-  type GitCommandRunner,
-} from "@/lib/pull-requests/github";
+import type { GitCommandRunner, GitHubFetch } from "@/lib/pull-requests/github";
 import type {
   BrowserPullRequestCiJobSummary,
+  BrowserPullRequestDetail,
   BrowserPullRequestLatestJobSummary,
   BrowserPullRequestSummary,
   EditPullRequestResponse,
   GetRepositoryPullRequestResponse,
   ListPullRequestsResponse,
   ListRepositoryPullRequestsResponse,
+  MergeRepositoryPullRequestResponse,
   PullRequestActivityEntry,
   PullRequestLatestJobSummary,
   PullRequestSummary,
   SynchronizePullRequestResponse,
 } from "@/packages/ugit-cli/src/pull-request-contract";
+import { evaluatePullRequestMergeReadiness, executeApprovedPullRequestMerge } from "./manual-merge";
+import { runAsyncCommand, type AsyncCommandRunner } from "./process";
 import { nudgePullRequestRunner } from "./runner";
 import { readCiResultArtifact } from "./results";
 import {
@@ -44,10 +45,13 @@ import {
 
 export type PullRequestServiceOptions = Readonly<{
   cwd?: string;
+  fetchImpl?: GitHubFetch;
+  githubToken?: string | null;
   storage?: StorageOptions | string;
   now?: () => Date;
   jobIdFactory?: () => string;
   nudgeRunner?: typeof nudgePullRequestRunner;
+  runCommand?: AsyncCommandRunner;
   runGit?: GitCommandRunner;
 }>;
 
@@ -120,10 +124,24 @@ export function listRepositoryPullRequests(
   };
 }
 
-export function getRepositoryPullRequest(
+export async function getRepositoryPullRequest(
   payload: unknown,
   options: PullRequestServiceOptions = {},
-): GetRepositoryPullRequestResponse {
+): Promise<GetRepositoryPullRequestResponse> {
+  const request = validateRepositoryPullRequestDetailRequest(payload, {
+    cwd: options.cwd,
+  });
+
+  return {
+    repositoryName: request.repositoryName,
+    pullRequest: await buildRepositoryPullRequestDetail(request, options),
+  };
+}
+
+export async function mergeRepositoryPullRequest(
+  payload: unknown,
+  options: PullRequestServiceOptions = {},
+): Promise<MergeRepositoryPullRequestResponse> {
   const request = validateRepositoryPullRequestDetailRequest(payload, {
     cwd: options.cwd,
   });
@@ -145,32 +163,50 @@ export function getRepositoryPullRequest(
     storage: options.storage,
   });
   const latestJob = findLatestCiJob(pullRequest, ciJobs);
-  const activityEvents = listPullRequestActivityEvents(pullRequest.id, {
-    repositoryName: request.repositoryName,
+  const mergeEvaluation = await evaluatePullRequestMergeReadiness({
+    pullRequest,
+    latestJob,
+    now: options.now,
+    runGit: options.runGit,
+    runCommand: options.runCommand ?? runAsyncCommand,
+    fetchImpl: options.fetchImpl,
+    githubToken: options.githubToken,
     storage: options.storage,
   });
 
+  if (
+    !mergeEvaluation.readiness.canMerge ||
+    !mergeEvaluation.githubRepository ||
+    !mergeEvaluation.canonicalPullRequest
+  ) {
+    const detail = await buildRepositoryPullRequestDetail(request, options);
+
+    return {
+      outcome: "not_ready",
+      message:
+        mergeEvaluation.readiness.blockingReasons[0] ??
+        "This pull request is not ready to merge yet.",
+      pullRequest: detail,
+    };
+  }
+
+  const mergeResult = await executeApprovedPullRequestMerge({
+    pullRequest,
+    latestJob,
+    githubRepository: mergeEvaluation.githubRepository,
+    canonicalPullRequest: mergeEvaluation.canonicalPullRequest,
+    now: options.now,
+    runCommand: options.runCommand ?? runAsyncCommand,
+    fetchImpl: options.fetchImpl,
+    githubToken: options.githubToken,
+    storage: options.storage,
+  });
+  const detail = await buildRepositoryPullRequestDetail(request, options);
+
   return {
-    repositoryName: request.repositoryName,
-    pullRequest: {
-      ...toBrowserPullRequestSummary({
-        pullRequest,
-        latestJob,
-        state: pullRequest.status === "merged" ? "merged" : "open",
-      }),
-      activity:
-        activityEvents.length > 0
-          ? activityEvents.map(toActivityEntry)
-          : deriveLegacyActivityEntries(pullRequest, ciJobs),
-      ciJobs: ciJobs.map(toBrowserCiJobSummary),
-      github: buildPullRequestGitHubDelegation({
-        repositoryPath: pullRequest.repositoryPath,
-        branchName: pullRequest.branchName,
-        baseBranch: pullRequest.baseBranch,
-        preferredRemoteName: pullRequest.remoteName,
-        runGit: options.runGit,
-      }),
-    },
+    outcome: mergeResult.outcome,
+    message: mergeResult.message,
+    pullRequest: detail,
   };
 }
 
@@ -210,6 +246,62 @@ export function editPullRequest(
     rerunQueued: updated.rerunJob !== null,
     jobId: updated.rerunJob?.id ?? null,
     queuePosition: updated.queuePosition,
+  };
+}
+
+async function buildRepositoryPullRequestDetail(
+  request: Readonly<{
+    repositoryName: string;
+    pullRequestId: number;
+  }>,
+  options: PullRequestServiceOptions,
+): Promise<BrowserPullRequestDetail> {
+  const pullRequest = readPullRequestForRepository(
+    request.repositoryName,
+    request.pullRequestId,
+    options.storage,
+  );
+
+  if (!pullRequest) {
+    throw new PullRequestRequestError(
+      `No ugit pull request exists for ${request.repositoryName}:${request.pullRequestId}.`,
+      404,
+    );
+  }
+
+  const ciJobs = listCiJobsForPullRequest(pullRequest.id, {
+    repositoryName: request.repositoryName,
+    storage: options.storage,
+  });
+  const latestJob = findLatestCiJob(pullRequest, ciJobs);
+  const activityEvents = listPullRequestActivityEvents(pullRequest.id, {
+    repositoryName: request.repositoryName,
+    storage: options.storage,
+  });
+  const mergeEvaluation = await evaluatePullRequestMergeReadiness({
+    pullRequest,
+    latestJob,
+    now: options.now,
+    runGit: options.runGit,
+    runCommand: options.runCommand ?? runAsyncCommand,
+    fetchImpl: options.fetchImpl,
+    githubToken: options.githubToken,
+    storage: options.storage,
+  });
+
+  return {
+    ...toBrowserPullRequestSummary({
+      pullRequest,
+      latestJob,
+      state: pullRequest.status === "merged" ? "merged" : "open",
+    }),
+    activity:
+      activityEvents.length > 0
+        ? activityEvents.map(toActivityEntry)
+        : deriveLegacyActivityEntries(pullRequest, ciJobs),
+    ciJobs: ciJobs.map(toBrowserCiJobSummary),
+    github: mergeEvaluation.github,
+    mergeReadiness: mergeEvaluation.readiness,
   };
 }
 

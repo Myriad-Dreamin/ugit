@@ -1,6 +1,6 @@
 # ugit
 
-`ugit` is a Git-first service for mirroring repositories onto a machine you control and orchestrating pull-request publication, CI, and fast-forward merge automation over SSH plus HTTP-over-SSH.
+`ugit` is a Git-first service for mirroring repositories onto a machine you control and orchestrating pull-request publication, CI, and manual GitHub-backed merge approval over SSH plus HTTP-over-SSH.
 
 ## Current scope
 
@@ -155,6 +155,14 @@ Pass `-m, --machine` to override the inferred machine.
 
 `ugit workflow run --local` is the exception: it resolves only the repository root, does not read `ugit.machine`, and rejects `-m, --machine` plus `-p, --port`.
 
+## GitHub merge approvals
+
+- Set `UGIT_GITHUB_TOKEN` on the ugit server before using manual pull-request merges from the repository detail page.
+- The token must allow pull-request reads plus squash-merge writes for the target GitHub repository.
+- After the latest CI job succeeds, ugit keeps the pull request in status `passed` until a user approves the merge from the repository pull-request detail page.
+- The merge action rechecks the latest successful CI result, verifies the mirrored local base branch still matches the fetched GitHub base branch, confirms GitHub reports the canonical pull request as mergeable, then performs a GitHub squash merge and realigns the mirrored local base branch to the fetched GitHub base commit.
+- If the branch is no longer fast-forwardable from the mirrored base branch, ugit blocks the merge and tells the user to rebase or update the branch, rerun CI, and retry.
+
 ## What `ugit serve` does
 
 For `ugit serve [-m <machine>] [-p <local-port>] [directory]`, the CLI:
@@ -168,6 +176,7 @@ For `ugit serve [-m <machine>] [-p <local-port>] [directory]`, the CLI:
 - Use `ugit pr create` the first time you publish a branch as a pull request.
 - Use `ugit pr edit` when only metadata changes, or when the base branch changes and you want CI rerun against the new target branch.
 - Use `ugit pr sync` after new commits land on a branch that already has a pull request.
+- Use the repository pull-request detail page to approve manual merges after the pull request reaches status `passed`.
 
 ## Workflow command boundaries
 
@@ -249,7 +258,9 @@ For `ugit workflow logs [-p <local-port>] <workflowId> [directory]`, the CLI:
 The server exposes repository-scoped pull-request and workflow-run APIs over HTTP-over-SSH:
 
 - `GET /api/pull-requests` lists stored pull requests for one repository and returns the latest CI job summary for each record
+- `GET /api/pull-requests/[pullRequestId]?repositoryName=<repo>` returns repo-scoped detail, merge readiness, and GitHub delegation for one pull request
 - `PATCH /api/pull-requests` edits stored pull-request metadata and queues CI only when the base branch changes
+- `POST /api/pull-requests/[pullRequestId]/merge?repositoryName=<repo>` revalidates readiness, performs the GitHub squash merge, and realigns the mirrored local base branch
 - `POST /api/pull-requests/sync` republishes a branch snapshot, updates pull-request metadata, and queues CI
 - `POST /api/workflows/runs` queues one named workflow run against a published branch snapshot
 - `GET /api/workflows/logs?workflowId=<id>` streams append-only workflow logs until the run completes
@@ -277,6 +288,7 @@ Execution model:
 - manual workflow runs reuse the managed repo-local worktree `.data/repos/<repo>/workflow1`, reset tracked state to the queued commit before each run, preserve reusable untracked workflow caches during normal preparation, and never attempt a merge
 - final result artifacts are written to `.data/ci-results/<repo>/<branch>.json`
 - manual workflow logs are appended to `.data/workflow-run-logs/<repo>/<workflowId>.log`
-- green pull requests attempt a fast-forward-only merge into the requested base branch
-- if a fast-forward merge starts tracking `workflow1`, ugit removes the managed linked worktree first so the mirrored repository stays clean and the path can become ordinary repository content
-- merge failures are persisted as CI failures without creating merge commits
+- successful pull requests stay open in status `passed` until a user approves a merge from the repo-scoped detail page
+- manual merge approval requires current passing CI, mirrored-base parity with GitHub, and GitHub mergeability before ugit requests a squash merge
+- after GitHub creates the squash commit, ugit fetches the base branch again and fast-forwards the mirrored local base branch to that fetched GitHub commit
+- if that post-merge base update starts tracking `workflow1`, ugit removes the managed linked worktree first so the mirrored repository stays clean and the path can become ordinary repository content

@@ -1,319 +1,212 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { attemptFastForwardMerge } from "@/lib/pr-runner/merge";
-import { runAsyncCommand } from "@/lib/pr-runner/process";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const workspaces: string[] = [];
+const { evictManagedWorkflowWorktreeForCommit } = vi.hoisted(() => ({
+  evictManagedWorkflowWorktreeForCommit: vi.fn(),
+}));
 
-afterEach(() => {
-  while (workspaces.length > 0) {
-    const workspace = workspaces.pop();
+vi.mock("@/lib/pr-runner/worktrees", () => ({
+  evictManagedWorkflowWorktreeForCommit,
+}));
 
-    if (workspace) {
-      rmSync(workspace, { recursive: true, force: true });
+import {
+  advanceMirroredBaseBranchToCommit,
+  fetchRemoteBranchCommit,
+  validateFastForwardPreflight,
+} from "@/lib/pr-runner/merge";
+
+beforeEach(() => {
+  evictManagedWorkflowWorktreeForCommit.mockReset();
+  evictManagedWorkflowWorktreeForCommit.mockResolvedValue(undefined);
+});
+
+describe("validateFastForwardPreflight", () => {
+  it("marks merge-ready branches whose head descends from the local base", async () => {
+    const runCommand = createRunCommandStub({
+      "git -C /tmp/alpha rev-parse --verify refs/heads/main": successResult("base-commit\n"),
+      "git -C /tmp/alpha merge-base --is-ancestor refs/heads/main abcdef1": successResult(),
+    });
+
+    await expect(
+      validateFastForwardPreflight({
+        repositoryPath: "/tmp/alpha",
+        baseBranch: "main",
+        commitHash: "abcdef1",
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "ready",
+      baseCommitHash: "base-commit",
+      message: "Base branch main can fast-forward to abcdef1.",
+    });
+  });
+
+  it("reports rebase-required branches before any mirror mutation", async () => {
+    const runCommand = createRunCommandStub({
+      "git -C /tmp/alpha rev-parse --verify refs/heads/main": successResult("base-commit\n"),
+      "git -C /tmp/alpha merge-base --is-ancestor refs/heads/main abcdef1": failureResult(),
+    });
+
+    await expect(
+      validateFastForwardPreflight({
+        repositoryPath: "/tmp/alpha",
+        baseBranch: "main",
+        commitHash: "abcdef1",
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "rebase_required",
+      baseCommitHash: "base-commit",
+      message:
+        "Base branch main is not an ancestor of abcdef1; rebase the pull request and rerun CI before merging.",
+    });
+  });
+});
+
+describe("fetchRemoteBranchCommit", () => {
+  it("fetches the latest remote base commit through a branch-specific tracking ref", async () => {
+    const runCommand = createRunCommandStub({
+      "git -C /tmp/alpha fetch --quiet upstream main:refs/remotes/upstream/main": successResult(),
+      "git -C /tmp/alpha rev-parse --verify refs/remotes/upstream/main": successResult("fedcba9\n"),
+    });
+
+    await expect(
+      fetchRemoteBranchCommit({
+        repositoryPath: "/tmp/alpha",
+        remoteName: "upstream",
+        branchName: "main",
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "succeeded",
+      commitHash: "fedcba9",
+      message: "Fetched upstream/main.",
+    });
+  });
+});
+
+describe("advanceMirroredBaseBranchToCommit", () => {
+  it("uses git merge when the mirrored base branch is checked out", async () => {
+    const runCommand = createRunCommandStub({
+      "git -C /tmp/alpha rev-parse --verify refs/heads/main": successResult("base-commit\n"),
+      "git -C /tmp/alpha merge-base --is-ancestor refs/heads/main fedcba9": successResult(),
+      "git -C /tmp/alpha symbolic-ref --quiet --short HEAD": successResult("main\n"),
+      "git -C /tmp/alpha merge --ff-only --quiet fedcba9": successResult(),
+    });
+
+    await expect(
+      advanceMirroredBaseBranchToCommit({
+        repositoryPath: "/tmp/alpha",
+        baseBranch: "main",
+        commitHash: "fedcba9",
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "succeeded",
+      message: "Fast-forwarded main to fedcba9.",
+    });
+    expect(evictManagedWorkflowWorktreeForCommit).toHaveBeenCalledWith(
+      "/tmp/alpha",
+      "fedcba9",
+      runCommand,
+    );
+  });
+
+  it("uses update-ref when another branch is checked out", async () => {
+    const runCommand = createRunCommandStub({
+      "git -C /tmp/alpha rev-parse --verify refs/heads/main": successResult("base-commit\n"),
+      "git -C /tmp/alpha merge-base --is-ancestor refs/heads/main fedcba9": successResult(),
+      "git -C /tmp/alpha symbolic-ref --quiet --short HEAD": successResult("feature/test\n"),
+      "git -C /tmp/alpha update-ref refs/heads/main fedcba9 base-commit": successResult(),
+    });
+
+    await expect(
+      advanceMirroredBaseBranchToCommit({
+        repositoryPath: "/tmp/alpha",
+        baseBranch: "main",
+        commitHash: "fedcba9",
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "succeeded",
+      message: "Fast-forwarded main to fedcba9.",
+    });
+  });
+
+  it("fails cleanly when managed workflow eviction rejects the update", async () => {
+    const runCommand = createRunCommandStub({
+      "git -C /tmp/alpha rev-parse --verify refs/heads/main": successResult("base-commit\n"),
+      "git -C /tmp/alpha merge-base --is-ancestor refs/heads/main fedcba9": successResult(),
+      "git -C /tmp/alpha symbolic-ref --quiet --short HEAD": successResult("main\n"),
+    });
+
+    evictManagedWorkflowWorktreeForCommit.mockRejectedValue(
+      new Error("Refusing to remove workflow1 because the repository is dirty."),
+    );
+
+    await expect(
+      advanceMirroredBaseBranchToCommit({
+        repositoryPath: "/tmp/alpha",
+        baseBranch: "main",
+        commitHash: "fedcba9",
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      message: "Refusing to remove workflow1 because the repository is dirty.",
+    });
+  });
+});
+
+function createRunCommandStub(
+  responses: Readonly<
+    Record<
+      string,
+      Readonly<{
+        exitCode: number;
+        stdout: string;
+        stderr: string;
+      }>
+    >
+  >,
+): ReturnType<typeof vi.fn> {
+  return vi.fn(async (command: string, args: readonly string[]) => {
+    const key = `${command} ${args.join(" ")}`;
+    const response = responses[key];
+
+    if (!response) {
+      throw new Error(`Unexpected command: ${key}`);
     }
-  }
-});
 
-describe("attemptFastForwardMerge", () => {
-  it("fast-forwards the base branch when the queued commit descends from it", async () => {
-    const repositoryPath = createGitRepository();
-    const baseCommit = commitFile(repositoryPath, "README.md", "# base\n", "base");
-
-    execFileSync("git", ["-C", repositoryPath, "checkout", "-q", "-b", "feature/test"], {
-      stdio: "ignore",
-    });
-    const featureCommit = commitFile(repositoryPath, "feature.txt", "feature\n", "feature");
-
-    execFileSync("git", ["-C", repositoryPath, "checkout", "-q", "main"], {
-      stdio: "ignore",
-    });
-
-    await expect(
-      attemptFastForwardMerge({
-        repositoryPath,
-        baseBranch: "main",
-        commitHash: featureCommit,
-      }),
-    ).resolves.toEqual({
-      status: "succeeded",
-      message: `Fast-forwarded main to ${featureCommit}.`,
-    });
-    expect(readHeadCommit(repositoryPath, "main")).toBe(featureCommit);
-    expect(baseCommit).not.toBe(featureCommit);
+    return response;
   });
-
-  it("reports a failed merge when the base branch is no longer an ancestor", async () => {
-    const repositoryPath = createGitRepository();
-
-    commitFile(repositoryPath, "README.md", "# base\n", "base");
-    execFileSync("git", ["-C", repositoryPath, "checkout", "-q", "-b", "feature/test"], {
-      stdio: "ignore",
-    });
-    const featureCommit = commitFile(repositoryPath, "feature.txt", "feature\n", "feature");
-
-    execFileSync("git", ["-C", repositoryPath, "checkout", "-q", "main"], {
-      stdio: "ignore",
-    });
-    const advancedMainCommit = commitFile(repositoryPath, "main.txt", "main\n", "main");
-
-    await expect(
-      attemptFastForwardMerge({
-        repositoryPath,
-        baseBranch: "main",
-        commitHash: featureCommit,
-      }),
-    ).resolves.toEqual({
-      status: "failed",
-      message: `Base branch main is not an ancestor of ${featureCommit}; fast-forward merge is not possible.`,
-    });
-    expect(readHeadCommit(repositoryPath, "main")).toBe(advancedMainCommit);
-  });
-
-  it("evicts the managed workflow slot before fast-forwarding a commit that tracks it", async () => {
-    const originPath = createGitRepository();
-    const baseCommit = commitFile(originPath, "README.md", "# base\n", "base");
-    const repositoryPath = cloneGitRepository(originPath);
-    const worktreePath = path.join(repositoryPath, "workflow1");
-
-    execFileSync(
-      "git",
-      ["-C", repositoryPath, "worktree", "add", "--detach", worktreePath, baseCommit],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    execFileSync("git", ["-C", originPath, "checkout", "-q", "-b", "feature/test"], {
-      stdio: "ignore",
-    });
-    const featureCommit = commitFile(
-      originPath,
-      "workflow1/project-file.txt",
-      "tracked\n",
-      "add workflow1 path",
-    );
-
-    execFileSync("git", ["-C", repositoryPath, "fetch", "--quiet", "origin", "feature/test"], {
-      stdio: "ignore",
-    });
-
-    const runCommand = vi.fn(runAsyncCommand);
-
-    await expect(
-      attemptFastForwardMerge({
-        repositoryPath,
-        baseBranch: "main",
-        commitHash: featureCommit,
-        runCommand,
-      }),
-    ).resolves.toEqual({
-      status: "succeeded",
-      message: `Fast-forwarded main to ${featureCommit}.`,
-    });
-
-    expect(readHeadCommit(repositoryPath, "main")).toBe(featureCommit);
-    expect(readGitOutput(repositoryPath, "status", "--short")).toBe("");
-    expect(readFileSync(path.join(repositoryPath, "workflow1", "project-file.txt"), "utf8")).toBe(
-      "tracked\n",
-    );
-    expect(existsSync(path.join(repositoryPath, "workflow1", ".git"))).toBe(false);
-    expect(listWorktreeRemovals(runCommand)).toContain(worktreePath);
-  });
-
-  it("evicts stale workflow1 residue when git still owns the managed slot", async () => {
-    const originPath = createGitRepository();
-    const baseCommit = commitFile(originPath, "README.md", "# base\n", "base");
-    const repositoryPath = cloneGitRepository(originPath);
-    const worktreePath = path.join(repositoryPath, "workflow1");
-
-    execFileSync(
-      "git",
-      ["-C", repositoryPath, "worktree", "add", "--detach", worktreePath, baseCommit],
-      {
-        stdio: "ignore",
-      },
-    );
-    rmSync(path.join(worktreePath, ".git"), { force: true });
-    writeFileSync(path.join(worktreePath, "README.md"), "stale\n", "utf8");
-
-    execFileSync("git", ["-C", originPath, "checkout", "-q", "-b", "feature/stale-slot"], {
-      stdio: "ignore",
-    });
-    const featureCommit = commitFile(
-      originPath,
-      "workflow1/project-file.txt",
-      "tracked\n",
-      "add workflow1 path",
-    );
-
-    execFileSync(
-      "git",
-      ["-C", repositoryPath, "fetch", "--quiet", "origin", "feature/stale-slot"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    const runCommand = vi.fn(runAsyncCommand);
-
-    await expect(
-      attemptFastForwardMerge({
-        repositoryPath,
-        baseBranch: "main",
-        commitHash: featureCommit,
-        runCommand,
-      }),
-    ).resolves.toEqual({
-      status: "succeeded",
-      message: `Fast-forwarded main to ${featureCommit}.`,
-    });
-
-    expect(readHeadCommit(repositoryPath, "main")).toBe(featureCommit);
-    expect(readGitOutput(repositoryPath, "status", "--short")).toBe("");
-    expect(existsSync(path.join(worktreePath, "README.md"))).toBe(false);
-    expect(readFileSync(path.join(worktreePath, "project-file.txt"), "utf8")).toBe("tracked\n");
-    expect(listWorktreeRemovals(runCommand)).toContain(worktreePath);
-  });
-
-  it("fails before fast-forwarding when unregistered workflow1 residue would dirty the repo", async () => {
-    const originPath = createGitRepository();
-    const baseCommit = commitFile(originPath, "README.md", "# base\n", "base");
-    const repositoryPath = cloneGitRepository(originPath);
-    const worktreePath = path.join(repositoryPath, "workflow1");
-
-    execFileSync(
-      "git",
-      ["-C", repositoryPath, "worktree", "add", "--detach", worktreePath, baseCommit],
-      {
-        stdio: "ignore",
-      },
-    );
-    rmSync(path.join(worktreePath, ".git"), { force: true });
-    writeFileSync(path.join(worktreePath, "README.md"), "stale\n", "utf8");
-    execFileSync("git", ["-C", repositoryPath, "worktree", "prune"], {
-      stdio: "ignore",
-    });
-
-    execFileSync("git", ["-C", originPath, "checkout", "-q", "-b", "feature/blocked-slot"], {
-      stdio: "ignore",
-    });
-    const featureCommit = commitFile(
-      originPath,
-      "workflow1/project-file.txt",
-      "tracked\n",
-      "add workflow1 path",
-    );
-
-    execFileSync(
-      "git",
-      ["-C", repositoryPath, "fetch", "--quiet", "origin", "feature/blocked-slot"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    const runCommand = vi.fn(runAsyncCommand);
-
-    await expect(
-      attemptFastForwardMerge({
-        repositoryPath,
-        baseBranch: "main",
-        commitHash: featureCommit,
-        runCommand,
-      }),
-    ).resolves.toMatchObject({
-      status: "failed",
-      message: expect.stringContaining("Refusing to remove"),
-    });
-
-    expect(readHeadCommit(repositoryPath, "main")).toBe(baseCommit);
-    expect(
-      readGitOutput(
-        repositoryPath,
-        "status",
-        "--short",
-        "--untracked-files=all",
-        "--",
-        "workflow1",
-      ),
-    ).toBe("?? workflow1/README.md");
-    expect(listWorktreeRemovals(runCommand)).not.toContain(worktreePath);
-  });
-});
-
-function createGitRepository(): string {
-  const repositoryPath = mkdtempSync(path.join(os.tmpdir(), "ugit-pr-merge-"));
-
-  workspaces.push(repositoryPath);
-
-  execFileSync("git", ["-c", "init.defaultBranch=main", "init", "--quiet", repositoryPath], {
-    stdio: "ignore",
-  });
-  execFileSync("git", ["-C", repositoryPath, "config", "user.name", "ugit-test"], {
-    stdio: "ignore",
-  });
-  execFileSync("git", ["-C", repositoryPath, "config", "user.email", "ugit@example.com"], {
-    stdio: "ignore",
-  });
-
-  return repositoryPath;
 }
 
-function cloneGitRepository(sourcePath: string): string {
-  const repositoryPath = mkdtempSync(path.join(os.tmpdir(), "ugit-pr-merge-clone-"));
-
-  workspaces.push(repositoryPath);
-
-  execFileSync("git", ["clone", "--quiet", sourcePath, repositoryPath], {
-    stdio: "ignore",
-  });
-  execFileSync("git", ["-C", repositoryPath, "config", "user.name", "ugit-test"], {
-    stdio: "ignore",
-  });
-  execFileSync("git", ["-C", repositoryPath, "config", "user.email", "ugit@example.com"], {
-    stdio: "ignore",
-  });
-
-  return repositoryPath;
+function successResult(
+  stdout: string = "",
+  stderr: string = "",
+): Readonly<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return {
+    exitCode: 0,
+    stdout,
+    stderr,
+  };
 }
 
-function commitFile(
-  repositoryPath: string,
-  relativePath: string,
-  contents: string,
-  message: string,
-): string {
-  const filePath = path.join(repositoryPath, relativePath);
-
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, contents, "utf8");
-  execFileSync("git", ["-C", repositoryPath, "add", relativePath], {
-    stdio: "ignore",
-  });
-  execFileSync("git", ["-C", repositoryPath, "commit", "-q", "-m", message], {
-    stdio: "ignore",
-  });
-
-  return readHeadCommit(repositoryPath, "HEAD");
-}
-
-function readHeadCommit(repositoryPath: string, refName: string): string {
-  return readGitOutput(repositoryPath, "rev-parse", refName);
-}
-
-function readGitOutput(repositoryPath: string, ...args: string[]): string {
-  return execFileSync("git", ["-C", repositoryPath, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-}
-
-function listWorktreeRemovals(runCommand: ReturnType<typeof vi.fn>): string[] {
-  return runCommand.mock.calls
-    .filter(([, args]) => args.includes("worktree") && args.includes("remove"))
-    .map(([, args]) => String(args[args.length - 1]));
+function failureResult(
+  stdout: string = "",
+  stderr: string = "",
+): Readonly<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return {
+    exitCode: 1,
+    stdout,
+    stderr,
+  };
 }

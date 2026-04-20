@@ -6,6 +6,7 @@ import {
   SUPERSEDED_CI_JOB_MESSAGE,
   claimRunnableJobs,
   completeCiJob,
+  completePullRequestMerge,
   listPullRequestActivityEvents,
   listPullRequests,
   listPullRequestsForRepository,
@@ -193,8 +194,14 @@ describe("listPullRequests", () => {
       jobId: "job-2",
       status: "succeeded",
       resultPath: "/tmp/job-2-result.json",
-      mergeStatus: "succeeded",
+      mergeStatus: "skipped",
       now: createNowFactory("2026-04-14T00:00:20.000Z"),
+      storage,
+    });
+    completePullRequestMerge({
+      pullRequestId: 2,
+      jobId: "job-2",
+      now: createNowFactory("2026-04-14T00:00:30.000Z"),
       storage,
     });
 
@@ -298,8 +305,14 @@ describe("pull-request activity events", () => {
       jobId: "job-1",
       status: "succeeded",
       resultPath: "/tmp/job-1-result.json",
-      mergeStatus: "succeeded",
+      mergeStatus: "skipped",
       now: createNowFactory("2026-04-20T00:00:20.000Z"),
+      storage,
+    });
+    completePullRequestMerge({
+      pullRequestId: 1,
+      jobId: "job-1",
+      now: createNowFactory("2026-04-20T00:00:30.000Z"),
       storage,
     });
 
@@ -430,8 +443,14 @@ describe("updatePullRequest", () => {
       jobId: "job-1",
       status: "succeeded",
       resultPath: "/tmp/job-1-result.json",
-      mergeStatus: "succeeded",
+      mergeStatus: "skipped",
       now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      storage,
+    });
+    completePullRequestMerge({
+      pullRequestId: 1,
+      jobId: "job-1",
+      now: createNowFactory("2026-04-14T00:00:15.000Z"),
       storage,
     });
 
@@ -483,8 +502,14 @@ describe("updatePullRequest", () => {
       jobId: "job-1",
       status: "succeeded",
       resultPath: "/tmp/job-1-result.json",
-      mergeStatus: "succeeded",
+      mergeStatus: "skipped",
       now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      storage,
+    });
+    completePullRequestMerge({
+      pullRequestId: 1,
+      jobId: "job-1",
+      now: createNowFactory("2026-04-14T00:00:15.000Z"),
       storage,
     });
 

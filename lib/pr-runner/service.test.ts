@@ -4,9 +4,18 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitCommandRunner } from "@/lib/pull-requests/github";
 
-const { mockedNudgePullRequestRunner } = vi.hoisted(() => ({
-  mockedNudgePullRequestRunner: vi.fn(),
+const { mockedEvictManagedWorkflowWorktreeForCommit, mockedNudgePullRequestRunner } = vi.hoisted(
+  () => ({
+    mockedEvictManagedWorkflowWorktreeForCommit: vi.fn(),
+    mockedNudgePullRequestRunner: vi.fn(),
+  }),
+);
+
+vi.mock("@/lib/pr-runner/worktrees", () => ({
+  evictManagedWorkflowWorktreeForCommit: mockedEvictManagedWorkflowWorktreeForCommit,
 }));
+
+const mockedEvictManagedWorkflowWorktree = mockedEvictManagedWorkflowWorktreeForCommit;
 
 vi.mock("@/lib/pr-runner/runner", () => ({
   nudgePullRequestRunner: mockedNudgePullRequestRunner,
@@ -17,16 +26,17 @@ import {
   getRepositoryPullRequest,
   listPullRequests,
   listRepositoryPullRequests,
+  mergeRepositoryPullRequest,
   synchronizePullRequest,
 } from "@/lib/pr-runner/service";
 import { writeCiResultArtifact } from "@/lib/pr-runner/results";
-import { completeCiJob, readPullRequest } from "@/lib/pr-runner/storage";
+import { completeCiJob, completePullRequestMerge, readPullRequest } from "@/lib/pr-runner/storage";
 import { resetStorageCacheForTests } from "@/lib/storage/sqlite";
-import { PullRequestRequestError } from "@/lib/pr-runner/validation";
-
 const workspaces: string[] = [];
 
 beforeEach(() => {
+  mockedEvictManagedWorkflowWorktree.mockReset();
+  mockedEvictManagedWorkflowWorktree.mockResolvedValue(undefined);
   mockedNudgePullRequestRunner.mockReset();
   mockedNudgePullRequestRunner.mockResolvedValue(undefined);
 });
@@ -87,38 +97,7 @@ describe("listPullRequests service", () => {
 });
 
 describe("listRepositoryPullRequests service", () => {
-  it("returns browser-safe repo-scoped summaries without repository paths", () => {
-    const workspace = createWorkspace();
-    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
-    const storage = path.join(workspace, "storage", "pull-requests");
-
-    synchronizePullRequest(createSyncPayload(repositoryPath), {
-      cwd: workspace,
-      storage,
-      now: createNowFactory("2026-04-20T00:00:00.000Z"),
-      jobIdFactory: createJobIdFactory("job-1"),
-    });
-
-    const response = listRepositoryPullRequests(
-      {
-        repositoryName: "alpha",
-      },
-      {
-        cwd: workspace,
-        storage,
-      },
-    );
-
-    expect(response.pullRequests[0]).toMatchObject({
-      id: 1,
-      repositoryName: "alpha",
-      branchName: "feature/test",
-    });
-    expect(response.pullRequests[0]).not.toHaveProperty("repositoryPath");
-    expect(response.pullRequests[0]?.latestJob).not.toHaveProperty("resultPath");
-  });
-
-  it("sanitizes CI job errors in browser-safe list and detail responses", () => {
+  it("sanitizes CI job errors in browser-safe list responses", () => {
     const workspace = createWorkspace();
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
     const storage = path.join(workspace, "storage", "pull-requests");
@@ -151,35 +130,19 @@ describe("listRepositoryPullRequests service", () => {
         storage,
       },
     );
-    const detail = getRepositoryPullRequest(
-      {
-        repositoryName: "alpha",
-        pullRequestId: "1",
-      },
-      {
-        cwd: workspace,
-        storage,
-      },
-    );
 
     expect(list.pullRequests[0]?.latestJob?.errorMessage).toBe(
       "The CI job failed with an internal error. Check server logs for details.",
     );
-    expect(detail.pullRequest.latestJob?.errorMessage).toBe(
-      "The CI job failed with an internal error. Check server logs for details.",
-    );
-    expect(detail.pullRequest.ciJobs[0]?.errorMessage).toBe(
-      "The CI job failed with an internal error. Check server logs for details.",
-    );
-    expect(JSON.stringify({ detail, list })).not.toContain(workspace);
-    expect(JSON.stringify({ detail, list })).not.toContain(repositoryPath);
-    expect(JSON.stringify({ detail, list })).not.toContain(managedWorktreePath);
-    expect(JSON.stringify({ detail, list })).not.toContain(internalErrorMessage);
+    expect(JSON.stringify(list)).not.toContain(workspace);
+    expect(JSON.stringify(list)).not.toContain(repositoryPath);
+    expect(JSON.stringify(list)).not.toContain(managedWorktreePath);
+    expect(JSON.stringify(list)).not.toContain(internalErrorMessage);
   });
 });
 
 describe("getRepositoryPullRequest service", () => {
-  it("returns repo-owned detail with activity, CI history, and GitHub delegation", () => {
+  it("returns repo-owned detail with readiness, CI history, and canonical GitHub delegation", async () => {
     const workspace = createWorkspace();
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
     const storage = path.join(workspace, "storage", "pull-requests");
@@ -214,8 +177,8 @@ describe("getRepositoryPullRequest service", () => {
           },
         ],
         merge: {
-          status: "succeeded",
-          message: "Fast-forwarded main to abcdef1.",
+          status: "skipped",
+          message: "Manual approval is required before this pull request can merge.",
         },
       },
       {
@@ -227,12 +190,12 @@ describe("getRepositoryPullRequest service", () => {
       jobId: "job-1",
       status: "succeeded",
       resultPath: artifactPath,
-      mergeStatus: "succeeded",
+      mergeStatus: "skipped",
       now: createNowFactory("2026-04-20T00:00:20.000Z"),
       storage,
     });
 
-    const detail = getRepositoryPullRequest(
+    const detail = await getRepositoryPullRequest(
       {
         repositoryName: "alpha",
         pullRequestId: "1",
@@ -244,28 +207,69 @@ describe("getRepositoryPullRequest service", () => {
           [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]:
+            successResult(),
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]:
+            successResult("fedcba9\n"),
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]:
+            successResult("fedcba9\n"),
+        }),
+        fetchImpl: createGitHubFetchSequence([
+          Response.json([
+            {
+              number: 7,
+              html_url: "https://github.com/acme/alpha/pull/7",
+            },
+          ]),
+          Response.json({
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+            mergeable: true,
+            head: {
+              ref: "feature/test",
+              sha: "abcdef1",
+            },
+            base: {
+              ref: "main",
+              sha: "fedcba9",
+            },
+          }),
+        ]),
+        githubToken: "token",
       },
     );
 
     expect(detail.pullRequest).toMatchObject({
       id: 1,
       repositoryName: "alpha",
+      status: "passed",
       latestJob: expect.objectContaining({
         id: "job-1",
         status: "succeeded",
       }),
       github: expect.objectContaining({
-        state: "compare",
-        remoteName: "upstream",
+        state: "pull_request",
+        url: "https://github.com/acme/alpha/pull/7",
+      }),
+      mergeReadiness: expect.objectContaining({
+        state: "ready",
+        canMerge: true,
       }),
     });
-    expect(detail.pullRequest.activity).toEqual(
+    expect(detail.pullRequest.mergeReadiness.checks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: "created",
+          id: "current_ci",
+          state: "ready",
         }),
         expect.objectContaining({
-          type: "merged",
+          id: "base_parity",
+          state: "ready",
+        }),
+        expect.objectContaining({
+          id: "github_mergeability",
+          state: "ready",
         }),
       ]),
     );
@@ -273,47 +277,51 @@ describe("getRepositoryPullRequest service", () => {
       expect.objectContaining({
         id: "job-1",
         workflowResultStatus: "available",
-        workflowExecutions: [
-          expect.objectContaining({
-            name: "lint",
-            status: "passed",
-          }),
-        ],
       }),
     ]);
+    expect(detail.pullRequest.activity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "created",
+        }),
+        expect.objectContaining({
+          type: "ci_finished",
+        }),
+      ]),
+    );
     expect(detail.pullRequest).not.toHaveProperty("repositoryPath");
   });
 
-  it("sanitizes missing workflow artifact errors for browser-safe detail responses", () => {
+  it("marks readiness blocked when the canonical GitHub head drifts past the passing CI commit", async () => {
     const workspace = createWorkspace();
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
     const storage = path.join(workspace, "storage", "pull-requests");
-    const missingArtifactPath = path.join(
-      workspace,
-      ".data",
-      "ci-results",
-      "alpha",
-      "feature",
-      "test.json",
-    );
+    const featureCommit = "abcdef1";
+    const githubHeadCommit = "github-head-commit";
 
-    synchronizePullRequest(createSyncPayload(repositoryPath), {
-      cwd: workspace,
-      storage,
-      now: createNowFactory("2026-04-20T00:00:00.000Z"),
-      jobIdFactory: createJobIdFactory("job-1"),
-    });
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-20T01:00:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
 
     completeCiJob({
       jobId: "job-1",
-      status: "failed",
-      resultPath: missingArtifactPath,
-      mergeStatus: "failed",
-      now: createNowFactory("2026-04-20T00:00:20.000Z"),
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-20T01:00:20.000Z"),
       storage,
     });
 
-    const detail = getRepositoryPullRequest(
+    const detail = await getRepositoryPullRequest(
       {
         repositoryName: "alpha",
         pullRequestId: "1",
@@ -321,22 +329,69 @@ describe("getRepositoryPullRequest service", () => {
       {
         cwd: workspace,
         storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]:
+            successResult(),
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]:
+            successResult("fedcba9\n"),
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]:
+            successResult("fedcba9\n"),
+        }),
+        fetchImpl: createGitHubFetchSequence([
+          Response.json([
+            {
+              number: 7,
+              html_url: "https://github.com/acme/alpha/pull/7",
+            },
+          ]),
+          Response.json({
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+            mergeable: true,
+            head: {
+              ref: "feature/test",
+              sha: githubHeadCommit,
+            },
+            base: {
+              ref: "main",
+              sha: "fedcba9",
+            },
+          }),
+        ]),
+        githubToken: "token",
       },
     );
 
-    expect(detail.pullRequest.ciJobs).toEqual([
-      expect.objectContaining({
-        id: "job-1",
-        workflowResultStatus: "missing",
-        workflowResultError: "The CI result artifact is unavailable for this job.",
-        workflowExecutions: [],
-      }),
-    ]);
-    expect(detail.pullRequest.ciJobs[0]?.workflowResultError).not.toContain(workspace);
-    expect(detail.pullRequest.ciJobs[0]?.workflowResultError).not.toContain(missingArtifactPath);
+    expect(detail.pullRequest.mergeReadiness).toMatchObject({
+      state: "blocked",
+      canMerge: false,
+      summary: expect.stringContaining(githubHeadCommit),
+      blockingReasons: [expect.stringContaining(githubHeadCommit)],
+    });
+    expect(detail.pullRequest.mergeReadiness.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "current_ci",
+          state: "blocked",
+          message: expect.stringContaining(githubHeadCommit),
+        }),
+        expect.objectContaining({
+          id: "base_parity",
+          state: "ready",
+        }),
+        expect.objectContaining({
+          id: "github_mergeability",
+          state: "ready",
+        }),
+      ]),
+    );
   });
 
-  it("rejects pull requests that belong to a different repository", () => {
+  it("rejects pull requests that belong to a different repository", async () => {
     const workspace = createWorkspace();
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
     const storage = path.join(workspace, "storage", "pull-requests");
@@ -350,7 +405,7 @@ describe("getRepositoryPullRequest service", () => {
       jobIdFactory: createJobIdFactory("job-1"),
     });
 
-    expect(() =>
+    await expect(
       getRepositoryPullRequest(
         {
           repositoryName: "beta",
@@ -361,7 +416,797 @@ describe("getRepositoryPullRequest service", () => {
           storage,
         },
       ),
-    ).toThrow("No ugit pull request exists for beta:1.");
+    ).rejects.toThrow("No ugit pull request exists for beta:1.");
+  });
+});
+
+describe("mergeRepositoryPullRequest service", () => {
+  it("squash-merges on GitHub, realigns the mirrored base branch, and persists merged state", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+          mergeable: true,
+          head: {
+            ref: "feature/test",
+            sha: featureCommit,
+          },
+          base: {
+            ref: "main",
+            sha: "base-commit",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          merged: true,
+          message: "Pull Request successfully merged",
+          sha: "merged-commit",
+        }),
+      );
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T00:00:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T00:00:20.000Z"),
+      storage,
+    });
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
+            successResult(),
+            successResult(),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
+            successResult("base-commit\n"),
+            successResult("merged-commit\n"),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+          [`git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main ${featureCommit}`]:
+            successResult(),
+          [`git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main merged-commit`]:
+            successResult(),
+          [`git -C ${repositoryPath} symbolic-ref --quiet --short HEAD`]:
+            successResult("feature/test\n"),
+          [`git -C ${repositoryPath} update-ref refs/heads/main merged-commit base-commit`]:
+            successResult(),
+        }),
+        fetchImpl,
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("merged");
+    expect(response.message).toContain("merged-commit");
+    expect(response.pullRequest.status).toBe("merged");
+    expect(response.pullRequest.state).toBe("merged");
+    expect(response.pullRequest.activity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "merged",
+        }),
+      ]),
+    );
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "merged",
+    });
+    expect(JSON.parse(String(fetchImpl.mock.calls[2]?.[1]?.body))).toEqual({
+      merge_method: "squash",
+      sha: featureCommit,
+    });
+  });
+
+  it("returns not_ready when GitHub rejects the squash merge because the head changed", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+          mergeable: true,
+          head: {
+            ref: "feature/test",
+            sha: featureCommit,
+          },
+          base: {
+            ref: "main",
+            sha: "base-commit",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            message: "Head branch was modified. Review and try the merge again.",
+          },
+          {
+            status: 409,
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+          mergeable: true,
+          head: {
+            ref: "feature/test",
+            sha: featureCommit,
+          },
+          base: {
+            ref: "main",
+            sha: "base-commit",
+          },
+        }),
+      );
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T00:30:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T00:30:20.000Z"),
+      storage,
+    });
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
+            successResult(),
+            successResult(),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+          [`git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main ${featureCommit}`]:
+            successResult(),
+        }),
+        fetchImpl,
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("not_ready");
+    expect(response.message).toContain("Head branch was modified");
+    expect(response.pullRequest.status).toBe("passed");
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "passed",
+    });
+    expect(JSON.parse(String(fetchImpl.mock.calls[2]?.[1]?.body))).toEqual({
+      merge_method: "squash",
+      sha: featureCommit,
+    });
+  });
+
+  it("blocks manual approval when the branch must be rebased", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const newBaseCommit = "fedcba9";
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T01:00:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T01:00:20.000Z"),
+      storage,
+    });
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
+            successResult(),
+            successResult(),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
+            successResult(`${newBaseCommit}\n`),
+            successResult(`${newBaseCommit}\n`),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]: [
+            successResult(`${newBaseCommit}\n`),
+            successResult(`${newBaseCommit}\n`),
+            successResult(`${newBaseCommit}\n`),
+          ],
+          [`git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main ${featureCommit}`]:
+            failureResult(),
+        }),
+        fetchImpl: createGitHubFetchSequence([
+          Response.json([
+            {
+              number: 7,
+              html_url: "https://github.com/acme/alpha/pull/7",
+            },
+          ]),
+          Response.json({
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+            mergeable: true,
+            head: {
+              ref: "feature/test",
+              sha: featureCommit,
+            },
+            base: {
+              ref: "main",
+              sha: newBaseCommit,
+            },
+          }),
+          Response.json([
+            {
+              number: 7,
+              html_url: "https://github.com/acme/alpha/pull/7",
+            },
+          ]),
+          Response.json({
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+            mergeable: true,
+            head: {
+              ref: "feature/test",
+              sha: featureCommit,
+            },
+            base: {
+              ref: "main",
+              sha: newBaseCommit,
+            },
+          }),
+        ]),
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("rebase_required");
+    expect(response.message).toContain("rebase the pull request and rerun CI before merging");
+    expect(response.pullRequest.status).toBe("passed");
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "passed",
+    });
+  });
+
+  it("fails closed when a newer synchronization lands during merge preflight", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const nextFeatureCommit = "abcdef2";
+    const githubResponses = [
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: featureCommit,
+        },
+        base: {
+          ref: "main",
+          sha: "base-commit",
+        },
+      }),
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: featureCommit,
+        },
+        base: {
+          ref: "main",
+          sha: "base-commit",
+        },
+      }),
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      if ((init?.method ?? "GET") !== "GET") {
+        throw new Error("GitHub merge should not run after a newer synchronization.");
+      }
+
+      const response = githubResponses.shift();
+
+      if (!response) {
+        throw new Error("Unexpected extra GitHub request.");
+      }
+
+      return response;
+    });
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T01:30:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T01:30:20.000Z"),
+      storage,
+    });
+
+    const mergeBaseCommand = `git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main ${featureCommit}`;
+    let synchronizedDuringPreflight = false;
+    const runCommand = async (command: string, args: readonly string[]) => {
+      const key = `${command} ${args.join(" ")}`;
+
+      if (
+        key === `git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`
+      ) {
+        return successResult();
+      }
+
+      if (key === `git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`) {
+        return successResult("base-commit\n");
+      }
+
+      if (key === `git -C ${repositoryPath} rev-parse --verify refs/heads/main`) {
+        return successResult("base-commit\n");
+      }
+
+      if (key === mergeBaseCommand) {
+        if (!synchronizedDuringPreflight) {
+          synchronizedDuringPreflight = true;
+          synchronizePullRequest(
+            createSyncPayload(repositoryPath, {
+              commitHash: nextFeatureCommit,
+              remoteName: "upstream",
+            }),
+            {
+              cwd: workspace,
+              storage,
+              now: createNowFactory("2026-04-21T01:30:30.000Z"),
+              jobIdFactory: createJobIdFactory("job-2"),
+            },
+          );
+        }
+
+        return successResult();
+      }
+
+      throw new Error(`Unexpected command: ${key}`);
+    };
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand,
+        fetchImpl,
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("not_ready");
+    expect(response.message).toContain("changed while merge approval was running");
+    expect(response.pullRequest.status).toBe("queued");
+    expect(response.pullRequest.latestJob).toMatchObject({
+      id: "job-2",
+      status: "queued",
+    });
+    expect(response.pullRequest.mergeReadiness).toMatchObject({
+      state: "blocked",
+      canMerge: false,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "queued",
+      headCommitHash: nextFeatureCommit,
+      latestJobId: "job-2",
+    });
+  });
+
+  it("refuses approval when the canonical GitHub pull request head differs from the passing CI commit", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const githubHeadCommit = "github-head-commit";
+    const githubResponses = [
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: githubHeadCommit,
+        },
+        base: {
+          ref: "main",
+          sha: "base-commit",
+        },
+      }),
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: githubHeadCommit,
+        },
+        base: {
+          ref: "main",
+          sha: "base-commit",
+        },
+      }),
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      if ((init?.method ?? "GET") !== "GET") {
+        throw new Error("GitHub merge should not run when the canonical head is stale.");
+      }
+
+      const response = githubResponses.shift();
+
+      if (!response) {
+        throw new Error("Unexpected extra GitHub request.");
+      }
+
+      return response;
+    });
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T02:00:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T02:00:20.000Z"),
+      storage,
+    });
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
+            successResult(),
+            successResult(),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+        }),
+        fetchImpl,
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("not_ready");
+    expect(response.message).toContain(githubHeadCommit);
+    expect(response.pullRequest.status).toBe("passed");
+    expect(response.pullRequest.mergeReadiness).toMatchObject({
+      state: "blocked",
+      canMerge: false,
+      summary: expect.stringContaining(githubHeadCommit),
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "passed",
+    });
+  });
+
+  it("refuses approval when the canonical GitHub pull request targets a different base branch", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const githubBaseBranch = "release";
+    const githubResponses = [
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: featureCommit,
+        },
+        base: {
+          ref: githubBaseBranch,
+          sha: "base-commit",
+        },
+      }),
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: featureCommit,
+        },
+        base: {
+          ref: githubBaseBranch,
+          sha: "base-commit",
+        },
+      }),
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      if ((init?.method ?? "GET") !== "GET") {
+        throw new Error("GitHub merge should not run when the canonical base branch is stale.");
+      }
+
+      const response = githubResponses.shift();
+
+      if (!response) {
+        throw new Error("Unexpected extra GitHub request.");
+      }
+
+      return response;
+    });
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T02:30:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T02:30:20.000Z"),
+      storage,
+    });
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
+            successResult(),
+            successResult(),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+        }),
+        fetchImpl,
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("not_ready");
+    expect(response.message).toContain(githubBaseBranch);
+    expect(response.message).toContain("ugit expects main");
+    expect(response.pullRequest.status).toBe("passed");
+    expect(response.pullRequest.mergeReadiness).toMatchObject({
+      state: "blocked",
+      canMerge: false,
+      summary: expect.stringContaining(githubBaseBranch),
+      checks: expect.arrayContaining([
+        expect.objectContaining({
+          id: "current_ci",
+          state: "blocked",
+          message: expect.stringContaining("ugit expects main"),
+        }),
+      ]),
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "passed",
+    });
   });
 });
 
@@ -382,13 +1227,19 @@ describe("synchronizePullRequest service", () => {
       jobId: "job-1",
       status: "succeeded",
       resultPath: "/tmp/job-1-result.json",
-      mergeStatus: "succeeded",
+      mergeStatus: "skipped",
       now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      storage,
+    });
+    completePullRequestMerge({
+      pullRequestId: 1,
+      jobId: "job-1",
+      now: createNowFactory("2026-04-14T00:00:15.000Z"),
       storage,
     });
     mockedNudgePullRequestRunner.mockClear();
 
-    try {
+    expect(() =>
       synchronizePullRequest(
         createSyncPayload(repositoryPath, {
           commitHash: "abcdef2",
@@ -399,20 +1250,9 @@ describe("synchronizePullRequest service", () => {
           now: createNowFactory("2026-04-14T00:00:20.000Z"),
           jobIdFactory: createJobIdFactory("job-2"),
         },
-      );
+      ),
+    ).toThrow("Merged pull requests cannot be synchronized.");
 
-      throw new Error("Expected merged PR sync to fail.");
-    } catch (error) {
-      expect(error).toBeInstanceOf(PullRequestRequestError);
-      expect((error as PullRequestRequestError).statusCode).toBe(409);
-      expect((error as Error).message).toBe("Merged pull requests cannot be synchronized.");
-    }
-
-    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
-      headCommitHash: "abcdef1",
-      latestJobId: "job-1",
-      status: "merged",
-    });
     expect(mockedNudgePullRequestRunner).not.toHaveBeenCalled();
   });
 });
@@ -523,13 +1363,19 @@ describe("editPullRequest service", () => {
       jobId: "job-1",
       status: "succeeded",
       resultPath: "/tmp/job-1-result.json",
-      mergeStatus: "succeeded",
+      mergeStatus: "skipped",
       now: createNowFactory("2026-04-14T00:00:10.000Z"),
+      storage,
+    });
+    completePullRequestMerge({
+      pullRequestId: 1,
+      jobId: "job-1",
+      now: createNowFactory("2026-04-14T00:00:15.000Z"),
       storage,
     });
     mockedNudgePullRequestRunner.mockClear();
 
-    try {
+    expect(() =>
       editPullRequest(
         {
           repositoryPath,
@@ -542,20 +1388,9 @@ describe("editPullRequest service", () => {
           now: createNowFactory("2026-04-14T00:00:20.000Z"),
           jobIdFactory: createJobIdFactory("job-2"),
         },
-      );
+      ),
+    ).toThrow("Merged pull requests cannot change base branches.");
 
-      throw new Error("Expected merged PR retarget to fail.");
-    } catch (error) {
-      expect(error).toBeInstanceOf(PullRequestRequestError);
-      expect((error as PullRequestRequestError).statusCode).toBe(409);
-      expect((error as Error).message).toBe("Merged pull requests cannot change base branches.");
-    }
-
-    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
-      baseBranch: "main",
-      latestJobId: "job-1",
-      status: "merged",
-    });
     expect(mockedNudgePullRequestRunner).not.toHaveBeenCalled();
   });
 });
@@ -588,6 +1423,7 @@ function createSyncPayload(
     title?: string;
     body?: string;
     draft?: boolean;
+    remoteName?: string;
   }> = {},
 ): {
   publishedBranch: {
@@ -611,7 +1447,7 @@ function createSyncPayload(
       repositoryPath,
       branchName: "feature/test",
       commitHash: overrides.commitHash ?? "abcdef1",
-      remoteName: "origin",
+      remoteName: overrides.remoteName ?? "origin",
     },
     pullRequest: {
       repositoryPath,
@@ -620,7 +1456,7 @@ function createSyncPayload(
       title: overrides.title ?? "Add the runner",
       body: overrides.body ?? "Initial body.",
       draft: overrides.draft ?? false,
-      remoteName: "origin",
+      remoteName: overrides.remoteName ?? "origin",
     },
   };
 }
@@ -662,4 +1498,89 @@ function createRunGitStub(
 
     return response;
   });
+}
+
+function createRunCommandStub(
+  responses: Readonly<
+    Record<
+      string,
+      | Readonly<{
+          exitCode: number;
+          stdout: string;
+          stderr: string;
+        }>
+      | readonly Readonly<{
+          exitCode: number;
+          stdout: string;
+          stderr: string;
+        }>[]
+    >
+  >,
+): ReturnType<typeof vi.fn> {
+  return vi.fn(async (command: string, args: readonly string[]) => {
+    const key = `${command} ${args.join(" ")}`;
+    const configuredResponse = responses[key];
+
+    if (!configuredResponse) {
+      throw new Error(`Unexpected command: ${key}`);
+    }
+
+    const response = Array.isArray(configuredResponse)
+      ? (
+          configuredResponse as Array<
+            Readonly<{
+              exitCode: number;
+              stdout: string;
+              stderr: string;
+            }>
+          >
+        ).shift()
+      : configuredResponse;
+
+    if (!response) {
+      throw new Error(`Unexpected command: ${key}`);
+    }
+
+    return response;
+  });
+}
+
+function successResult(
+  stdout: string = "",
+  stderr: string = "",
+): Readonly<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return {
+    exitCode: 0,
+    stdout,
+    stderr,
+  };
+}
+
+function failureResult(
+  stdout: string = "",
+  stderr: string = "",
+): Readonly<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return {
+    exitCode: 1,
+    stdout,
+    stderr,
+  };
+}
+
+function createGitHubFetchSequence(responses: readonly Response[]): typeof fetch {
+  const fetchImpl = vi.fn<typeof fetch>();
+
+  responses.forEach((response) => {
+    fetchImpl.mockResolvedValueOnce(response);
+  });
+
+  return fetchImpl;
 }

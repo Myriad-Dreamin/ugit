@@ -1,9 +1,9 @@
-import { getRepositoryPullRequest } from "@/lib/pr-runner/service";
+import { mergeRepositoryPullRequest } from "@/lib/pr-runner/service";
 import { PullRequestRequestError } from "@/lib/pr-runner/validation";
 
 export const dynamic = "force-dynamic";
 
-type PullRequestRouteContext = Readonly<{
+type PullRequestMergeRouteContext = Readonly<{
   params:
     | Promise<{
         pullRequestId: string;
@@ -13,11 +13,14 @@ type PullRequestRouteContext = Readonly<{
       };
 }>;
 
-export async function GET(request: Request, context: PullRequestRouteContext): Promise<Response> {
+export async function POST(
+  request: Request,
+  context: PullRequestMergeRouteContext,
+): Promise<Response> {
   try {
     const url = new URL(request.url);
     const { pullRequestId } = await Promise.resolve(context.params);
-    const response = await getRepositoryPullRequest({
+    const response = await mergeRepositoryPullRequest({
       repositoryName: url.searchParams.get("repositoryName"),
       pullRequestId,
     });
@@ -39,7 +42,7 @@ export async function GET(request: Request, context: PullRequestRouteContext): P
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Unexpected pull-request read failure.",
+        error: error instanceof Error ? error.message : "Unexpected pull-request merge failure.",
       },
       { status: 500 },
     );

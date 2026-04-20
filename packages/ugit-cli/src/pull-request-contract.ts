@@ -146,10 +146,29 @@ export type PullRequestGitHubDelegation =
       message: string;
     };
 
+export type PullRequestMergeReadinessState = "ready" | "blocked" | "pending";
+
+export type PullRequestMergeReadinessCheck = {
+  id: "current_ci" | "base_parity" | "github_mergeability";
+  label: string;
+  state: PullRequestMergeReadinessState;
+  message: string;
+};
+
+export type PullRequestMergeReadiness = {
+  state: PullRequestMergeReadinessState;
+  canMerge: boolean;
+  summary: string;
+  blockingReasons: readonly string[];
+  checks: readonly PullRequestMergeReadinessCheck[];
+  checkedAt: string;
+};
+
 export type BrowserPullRequestDetail = BrowserPullRequestSummary & {
   activity: readonly PullRequestActivityEntry[];
   ciJobs: readonly BrowserPullRequestCiJobSummary[];
   github: PullRequestGitHubDelegation;
+  mergeReadiness: PullRequestMergeReadiness;
 };
 
 export type ListPullRequestsRequest = {
@@ -171,6 +190,12 @@ export type ListRepositoryPullRequestsResponse = {
 
 export type GetRepositoryPullRequestResponse = {
   repositoryName: string;
+  pullRequest: BrowserPullRequestDetail;
+};
+
+export type MergeRepositoryPullRequestResponse = {
+  outcome: "merged" | "not_ready" | "rebase_required";
+  message: string;
   pullRequest: BrowserPullRequestDetail;
 };
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRepositoryPullRequestMergePath,
   buildRepositoryPullRequestPath,
   buildRepositoryPullRequestsPath,
 } from "@/lib/pull-requests/rest-paths";
@@ -11,6 +12,9 @@ describe("pull-request REST paths", () => {
     );
     expect(buildRepositoryPullRequestPath("alpha", "17")).toBe(
       "/api/pull-requests/17?repositoryName=alpha",
+    );
+    expect(buildRepositoryPullRequestMergePath("alpha", "17")).toBe(
+      "/api/pull-requests/17/merge?repositoryName=alpha",
     );
   });
 });

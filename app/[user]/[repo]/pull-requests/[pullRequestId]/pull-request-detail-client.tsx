@@ -7,10 +7,14 @@ import {
   formatPullRequestTimestamp,
   isPullRequestCiJobActive,
 } from "@/lib/pull-requests/presentation";
-import { buildRepositoryPullRequestPath } from "@/lib/pull-requests/rest-paths";
+import {
+  buildRepositoryPullRequestMergePath,
+  buildRepositoryPullRequestPath,
+} from "@/lib/pull-requests/rest-paths";
 import type {
   BrowserPullRequestDetail,
   GetRepositoryPullRequestResponse,
+  MergeRepositoryPullRequestResponse,
 } from "@/packages/ugit-cli/src/pull-request-contract";
 
 const PULL_REQUEST_DETAIL_POLL_INTERVAL_MS = 2_000;
@@ -19,9 +23,16 @@ type PullRequestDetailClientProps = Readonly<{
   initialPullRequest: BrowserPullRequestDetail;
 }>;
 
+type MergeFeedback = Readonly<{
+  tone: "success" | "error";
+  message: string;
+}> | null;
+
 export function PullRequestDetailClient({ initialPullRequest }: PullRequestDetailClientProps) {
   const [pullRequest, setPullRequest] = useState(initialPullRequest);
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [mergeFeedback, setMergeFeedback] = useState<MergeFeedback>(null);
+  const [mergePending, setMergePending] = useState(false);
 
   const refreshPullRequest = useEffectEvent(async () => {
     const response = await fetch(
@@ -43,8 +54,46 @@ export function PullRequestDetailClient({ initialPullRequest }: PullRequestDetai
     });
   });
 
+  async function submitMergeApproval(): Promise<void> {
+    const response = await fetch(
+      buildRepositoryPullRequestMergePath(pullRequest.repositoryName, pullRequest.id),
+      {
+        method: "POST",
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as
+      | MergeRepositoryPullRequestResponse
+      | {
+          error?: string;
+        }
+      | null;
+
+    if (!response.ok) {
+      throw new Error(
+        payload && typeof payload === "object" && "error" in payload && payload.error
+          ? payload.error
+          : `Pull-request merge failed with status ${response.status}.`,
+      );
+    }
+
+    const mergeResponse = payload as MergeRepositoryPullRequestResponse;
+
+    startTransition(() => {
+      setPullRequest(mergeResponse.pullRequest);
+      setMergeFeedback({
+        tone: mergeResponse.outcome === "merged" ? "success" : "error",
+        message: mergeResponse.message,
+      });
+      setLiveError(null);
+    });
+  }
+
   useEffect(() => {
-    if (!pullRequest.latestJob || !isPullRequestCiJobActive(pullRequest.latestJob.status)) {
+    const shouldPoll =
+      (pullRequest.latestJob && isPullRequestCiJobActive(pullRequest.latestJob.status)) ||
+      (pullRequest.state === "open" && pullRequest.mergeReadiness.state === "pending");
+
+    if (!shouldPoll) {
       return;
     }
 
@@ -71,7 +120,9 @@ export function PullRequestDetailClient({ initialPullRequest }: PullRequestDetai
     pullRequest.id,
     pullRequest.latestJob,
     pullRequest.latestJob?.status,
+    pullRequest.mergeReadiness.state,
     pullRequest.repositoryName,
+    pullRequest.state,
   ]);
 
   return (
@@ -105,6 +156,80 @@ export function PullRequestDetailClient({ initialPullRequest }: PullRequestDetai
           <p className="workflow-live-note">{pullRequest.body}</p>
         ) : null}
         {liveError ? <p className="workflow-error-note">{liveError}</p> : null}
+      </div>
+      <div className="repositories-panel">
+        <div className="repositories-header">
+          <h2>Merge readiness</h2>
+          <p>{formatPullRequestStatus(pullRequest.mergeReadiness.state)}</p>
+        </div>
+        <p className="workflow-live-note">{pullRequest.mergeReadiness.summary}</p>
+        {pullRequest.mergeReadiness.checks.length === 0 ? (
+          <p className="empty-state">No merge checks are required for this pull request.</p>
+        ) : (
+          <ul className="workflow-run-list">
+            {pullRequest.mergeReadiness.checks.map((check) => (
+              <li key={check.id} className="workflow-run-card">
+                <div className="workflow-run-heading">
+                  <p className="workflow-run-name">{check.label}</p>
+                  <span className="workflow-run-status" data-status={check.state}>
+                    {formatPullRequestStatus(check.state)}
+                  </span>
+                </div>
+                <p
+                  className={check.state === "ready" ? "workflow-live-note" : "workflow-error-note"}
+                >
+                  {check.message}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="workflow-run-id">
+          Checked {formatPullRequestTimestamp(pullRequest.mergeReadiness.checkedAt)}
+        </p>
+        {pullRequest.state === "open" ? (
+          <div className="merge-action-row">
+            <button
+              type="button"
+              className="page-button"
+              disabled={!pullRequest.mergeReadiness.canMerge || mergePending}
+              onClick={() => {
+                setMergePending(true);
+                setMergeFeedback(null);
+
+                void submitMergeApproval()
+                  .catch((error) => {
+                    console.error("Failed to merge pull request.", error);
+                    startTransition(() => {
+                      setMergeFeedback({
+                        tone: "error",
+                        message:
+                          error instanceof Error
+                            ? error.message
+                            : "Pull-request merge failed unexpectedly.",
+                      });
+                    });
+                  })
+                  .finally(() => {
+                    startTransition(() => {
+                      setMergePending(false);
+                    });
+                  });
+              }}
+            >
+              {mergePending ? "Merging..." : "Merge via GitHub"}
+            </button>
+          </div>
+        ) : null}
+        {mergeFeedback ? (
+          <p
+            className={
+              mergeFeedback.tone === "success" ? "workflow-live-note" : "workflow-error-note"
+            }
+          >
+            {mergeFeedback.message}
+          </p>
+        ) : null}
       </div>
       <div className="repositories-panel">
         <div className="repositories-header">
