@@ -2,22 +2,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PullRequestRequestError } from "@/lib/pr-runner/validation";
 
 vi.mock("@/lib/pr-runner/service", () => ({
-  getRepositoryPullRequest: vi.fn(),
+  mergeRepositoryPullRequest: vi.fn(),
 }));
 
-import { GET } from "@/app/api/pull-requests/[pullRequestId]/route";
-import { getRepositoryPullRequest } from "@/lib/pr-runner/service";
+import { POST } from "@/app/api/pull-requests/[pullRequestId]/merge/route";
+import { mergeRepositoryPullRequest } from "@/lib/pr-runner/service";
 
-const mockedGetRepositoryPullRequest = vi.mocked(getRepositoryPullRequest);
+const mockedMergeRepositoryPullRequest = vi.mocked(mergeRepositoryPullRequest);
 
-describe("GET /api/pull-requests/[pullRequestId]", () => {
+describe("POST /api/pull-requests/[pullRequestId]/merge", () => {
   beforeEach(() => {
-    mockedGetRepositoryPullRequest.mockReset();
+    mockedMergeRepositoryPullRequest.mockReset();
   });
 
-  it("returns repo-scoped pull-request detail as JSON", async () => {
-    mockedGetRepositoryPullRequest.mockResolvedValue({
-      repositoryName: "alpha",
+  it("returns structured repo-scoped merge outcomes", async () => {
+    mockedMergeRepositoryPullRequest.mockResolvedValue({
+      outcome: "rebase_required",
+      message:
+        "Base branch main is not an ancestor of abcdef1; rebase the pull request and rerun CI before merging.",
       pullRequest: {
         id: 7,
         repositoryName: "alpha",
@@ -26,20 +28,10 @@ describe("GET /api/pull-requests/[pullRequestId]", () => {
         title: "Add PR pages",
         body: "",
         draft: false,
-        status: "running",
+        status: "passed",
         state: "open",
         latestCommitHash: "abcdef1",
-        latestJob: {
-          id: "job-1",
-          status: "running",
-          commitHash: "abcdef1",
-          errorMessage: null,
-          mergeStatus: null,
-          createdAt: "2026-04-20T00:00:00.000Z",
-          updatedAt: "2026-04-20T00:00:05.000Z",
-          startedAt: "2026-04-20T00:00:02.000Z",
-          finishedAt: null,
-        },
+        latestJob: null,
         createdAt: "2026-04-20T00:00:00.000Z",
         updatedAt: "2026-04-20T00:00:05.000Z",
         activity: [],
@@ -63,8 +55,10 @@ describe("GET /api/pull-requests/[pullRequestId]", () => {
       },
     });
 
-    const response = await GET(
-      new Request("http://localhost/api/pull-requests/7?repositoryName=alpha"),
+    const response = await POST(
+      new Request("http://localhost/api/pull-requests/7/merge?repositoryName=alpha", {
+        method: "POST",
+      }),
       {
         params: {
           pullRequestId: "7",
@@ -73,25 +67,25 @@ describe("GET /api/pull-requests/[pullRequestId]", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockedGetRepositoryPullRequest).toHaveBeenCalledWith({
+    expect(mockedMergeRepositoryPullRequest).toHaveBeenCalledWith({
       repositoryName: "alpha",
       pullRequestId: "7",
     });
-    const payload = await response.json();
-
-    expect(payload.pullRequest).not.toHaveProperty("repositoryPath");
-    expect(payload.pullRequest.latestJob).not.toHaveProperty("resultPath");
-    expect(payload.pullRequest.ciJobs).toEqual([]);
+    await expect(response.json()).resolves.toMatchObject({
+      outcome: "rebase_required",
+    });
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("returns not found when the pull request does not belong to the repository", async () => {
-    mockedGetRepositoryPullRequest.mockRejectedValue(
+  it("returns repository-scoped validation errors", async () => {
+    mockedMergeRepositoryPullRequest.mockRejectedValue(
       new PullRequestRequestError("No ugit pull request exists for alpha:7.", 404),
     );
 
-    const response = await GET(
-      new Request("http://localhost/api/pull-requests/7?repositoryName=alpha"),
+    const response = await POST(
+      new Request("http://localhost/api/pull-requests/7/merge?repositoryName=alpha", {
+        method: "POST",
+      }),
       {
         params: {
           pullRequestId: "7",

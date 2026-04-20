@@ -7,16 +7,9 @@ import { runAsyncCommand } from "@/lib/pr-runner/process";
 import { resetStorageCacheForTests } from "@/lib/storage/sqlite";
 import type { ValidatedPullRequestSyncRequest } from "@/lib/pr-runner/validation";
 
-const { attemptFastForwardMerge, executeWorkflowPackages, writeCiResultArtifact } = vi.hoisted(
-  () => ({
-    attemptFastForwardMerge: vi.fn(),
-    executeWorkflowPackages: vi.fn(),
-    writeCiResultArtifact: vi.fn(),
-  }),
-);
-
-vi.mock("@/lib/pr-runner/merge", () => ({
-  attemptFastForwardMerge,
+const { executeWorkflowPackages, writeCiResultArtifact } = vi.hoisted(() => ({
+  executeWorkflowPackages: vi.fn(),
+  writeCiResultArtifact: vi.fn(),
 }));
 
 vi.mock("@/lib/pr-runner/results", () => ({
@@ -39,13 +32,8 @@ import { executeCiJob, resetPullRequestRunnerForTests } from "@/lib/pr-runner/ru
 const workspaces: string[] = [];
 
 beforeEach(() => {
-  attemptFastForwardMerge.mockReset();
   executeWorkflowPackages.mockReset();
   writeCiResultArtifact.mockReset();
-  attemptFastForwardMerge.mockResolvedValue({
-    status: "succeeded",
-    message: "Fast-forwarded main to the queued commit.",
-  });
   executeWorkflowPackages.mockResolvedValue({
     success: true,
     workflows: [],
@@ -106,7 +94,7 @@ describe("executeCiJob", () => {
     expect(readCiJob("job-1", storage)).toMatchObject({
       id: "job-1",
       status: "succeeded",
-      mergeStatus: "succeeded",
+      mergeStatus: "skipped",
     });
   });
 
@@ -149,7 +137,6 @@ describe("executeCiJob", () => {
     });
 
     expect(executeWorkflowPackages).toHaveBeenCalledTimes(1);
-    expect(attemptFastForwardMerge).not.toHaveBeenCalled();
     expect(writeCiResultArtifact).not.toHaveBeenCalled();
     expect(readCiJob("job-1", storage)).toMatchObject({
       id: "job-1",

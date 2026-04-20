@@ -214,6 +214,13 @@ export type CompleteWorkflowRunOptions = Readonly<{
   storage?: StorageOptions | string;
 }>;
 
+export type CompletePullRequestMergeOptions = Readonly<{
+  pullRequestId: number;
+  jobId: string | null;
+  now?: () => Date;
+  storage?: StorageOptions | string;
+}>;
+
 type PullRequestRow = {
   id: number;
   repository_name: string;
@@ -1151,23 +1158,10 @@ export function completeCiJob(options: CompleteCiJobOptions): CiJobRecord {
               `
                 UPDATE pull_requests
                 SET status = ?, updated_at = ?
-                WHERE id = ?
+              WHERE id = ?
               `,
             )
             .run(mapJobStatusToPullRequestStatus(options.status), now, job.pullRequestId);
-
-          if (options.status === "succeeded" && mergeStatus === "succeeded") {
-            insertPullRequestActivityEvent(transaction, {
-              pullRequestId: job.pullRequestId,
-              repositoryName: job.repositoryName,
-              repositoryPath: job.repositoryPath,
-              eventType: "merged",
-              title: "Pull request merged",
-              description: `Merged ${job.branchName} into ${job.baseBranch}.`,
-              jobId: job.id,
-              createdAt: now,
-            });
-          }
         }
 
         return readCiJobById(transaction, options.jobId)!;
@@ -1418,6 +1412,50 @@ export function appendPullRequestActivityEvent(
   });
 }
 
+export function completePullRequestMerge(
+  options: CompletePullRequestMergeOptions,
+): PullRequestRecord {
+  ensurePullRequestStorage(options.storage);
+
+  return withStorage(options.storage, (database) =>
+    runStorageTransaction(
+      database,
+      (transaction) => {
+        const now = (options.now ?? (() => new Date()))().toISOString();
+        const pullRequest = readPullRequestById(transaction, options.pullRequestId);
+
+        if (!pullRequest) {
+          throw new Error(`Unknown pull request ${options.pullRequestId}.`);
+        }
+
+        transaction
+          .prepare<[PullRequestStatus, string, number]>(
+            `
+              UPDATE pull_requests
+              SET status = ?, updated_at = ?
+              WHERE id = ?
+            `,
+          )
+          .run("merged", now, options.pullRequestId);
+
+        insertPullRequestActivityEvent(transaction, {
+          pullRequestId: pullRequest.id,
+          repositoryName: pullRequest.repositoryName,
+          repositoryPath: pullRequest.repositoryPath,
+          eventType: "merged",
+          title: "Pull request merged",
+          description: `Merged ${pullRequest.branchName} into ${pullRequest.baseBranch} after manual approval.`,
+          jobId: options.jobId,
+          createdAt: now,
+        });
+
+        return readPullRequestById(transaction, options.pullRequestId)!;
+      },
+      "immediate",
+    ),
+  );
+}
+
 export function updatePullRequest(
   request: ValidatedPullRequestEditRequest,
   options: UpdatePullRequestOptions = {},
@@ -1554,7 +1592,7 @@ function mapJobStatusToPullRequestStatus(
 ): PullRequestStatus {
   switch (status) {
     case "succeeded":
-      return "merged";
+      return "passed";
     case "merge_failed":
       return "failed";
     case "superseded":

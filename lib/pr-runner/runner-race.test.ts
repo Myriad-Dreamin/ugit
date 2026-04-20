@@ -75,45 +75,28 @@ describe("executeCiJob merge races", () => {
       throw new Error("Expected the initial synchronization to claim job-1.");
     }
 
+    executeWorkflowPackages.mockImplementationOnce(async () => {
+      if (!queuedNewerJob) {
+        queuedNewerJob = true;
+
+        queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef2"), {
+          storage,
+          now: createNowFactory("2026-04-14T00:00:20.000Z"),
+          jobIdFactory: createJobIdFactory("job-2"),
+        });
+      }
+
+      return {
+        success: true,
+        workflows: [],
+      };
+    });
+
     const runCommand = vi.fn(async (_command: string, args: readonly string[]) => {
       if (args.includes("worktree") && args.includes("add")) {
         return {
           exitCode: 0,
           stdout: "",
-          stderr: "",
-        };
-      }
-
-      if (args.includes("rev-parse")) {
-        return {
-          exitCode: 0,
-          stdout: "base-commit",
-          stderr: "",
-        };
-      }
-
-      if (args.includes("merge-base")) {
-        return {
-          exitCode: 0,
-          stdout: "",
-          stderr: "",
-        };
-      }
-
-      if (args.includes("symbolic-ref")) {
-        if (!queuedNewerJob) {
-          queuedNewerJob = true;
-
-          queuePullRequestSynchronization(createRequest(repositoryPath, "abcdef2"), {
-            storage,
-            now: createNowFactory("2026-04-14T00:00:20.000Z"),
-            jobIdFactory: createJobIdFactory("job-2"),
-          });
-        }
-
-        return {
-          exitCode: 0,
-          stdout: "feature/other",
           stderr: "",
         };
       }
