@@ -1072,6 +1072,142 @@ describe("mergeRepositoryPullRequest service", () => {
       status: "passed",
     });
   });
+
+  it("refuses approval when the canonical GitHub pull request targets a different base branch", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const githubBaseBranch = "release";
+    const githubResponses = [
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: featureCommit,
+        },
+        base: {
+          ref: githubBaseBranch,
+          sha: "base-commit",
+        },
+      }),
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: featureCommit,
+        },
+        base: {
+          ref: githubBaseBranch,
+          sha: "base-commit",
+        },
+      }),
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      if ((init?.method ?? "GET") !== "GET") {
+        throw new Error("GitHub merge should not run when the canonical base branch is stale.");
+      }
+
+      const response = githubResponses.shift();
+
+      if (!response) {
+        throw new Error("Unexpected extra GitHub request.");
+      }
+
+      return response;
+    });
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T02:30:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T02:30:20.000Z"),
+      storage,
+    });
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
+            successResult(),
+            successResult(),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+        }),
+        fetchImpl,
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("not_ready");
+    expect(response.message).toContain(githubBaseBranch);
+    expect(response.message).toContain("ugit expects main");
+    expect(response.pullRequest.status).toBe("passed");
+    expect(response.pullRequest.mergeReadiness).toMatchObject({
+      state: "blocked",
+      canMerge: false,
+      summary: expect.stringContaining(githubBaseBranch),
+      checks: expect.arrayContaining([
+        expect.objectContaining({
+          id: "current_ci",
+          state: "blocked",
+          message: expect.stringContaining("ugit expects main"),
+        }),
+      ]),
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "passed",
+    });
+  });
 });
 
 describe("synchronizePullRequest service", () => {

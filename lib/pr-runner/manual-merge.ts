@@ -430,11 +430,31 @@ function resolveCurrentCiBlockingReason(
     return `The latest CI job ${latestJob.id} finished with status ${latestJob.status}. Wait for a passing run before merging.`;
   }
 
+  const canonicalBaseBranchBlockingReason = resolveCanonicalBaseBranchBlockingReason(
+    pullRequest,
+    canonicalPullRequest,
+  );
+
+  if (canonicalBaseBranchBlockingReason) {
+    return canonicalBaseBranchBlockingReason;
+  }
+
   if (canonicalPullRequest && canonicalPullRequest.headCommitHash !== pullRequest.headCommitHash) {
     return `GitHub pull request #${canonicalPullRequest.number} now points at ${canonicalPullRequest.headCommitHash}, but the latest passing CI job ${latestJob.id} only covers ${latestJob.commitHash}. Refresh and rerun CI before merging.`;
   }
 
   return null;
+}
+
+function resolveCanonicalBaseBranchBlockingReason(
+  pullRequest: PullRequestRecord,
+  canonicalPullRequest: CanonicalGitHubPullRequest | null,
+): string | null {
+  if (!canonicalPullRequest || canonicalPullRequest.baseBranch === pullRequest.baseBranch) {
+    return null;
+  }
+
+  return `GitHub pull request #${canonicalPullRequest.number} now targets ${canonicalPullRequest.baseBranch}, but ugit expects ${pullRequest.baseBranch}. Refresh the page, update the base branch, and rerun CI before merging.`;
 }
 
 function readCurrentPullRequestMergeSnapshot(
