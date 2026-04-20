@@ -178,11 +178,18 @@ describe("squashMergeGitHubPullRequest", () => {
           repository: "alpha",
         },
         pullRequestNumber: 7,
+        expectedHeadCommitHash: "abcdef1",
         fetchImpl,
       }),
     ).resolves.toEqual({
       message: "Pull Request successfully merged",
       mergeCommitHash: "1234567",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({
+      merge_method: "squash",
+      sha: "abcdef1",
     });
   });
 
@@ -209,6 +216,7 @@ describe("squashMergeGitHubPullRequest", () => {
           repository: "alpha",
         },
         pullRequestNumber: 7,
+        expectedHeadCommitHash: "abcdef1",
         fetchImpl,
       }),
     ).rejects.toEqual(new GitHubPullRequestMergeError("Pull Request is not mergeable", 409));

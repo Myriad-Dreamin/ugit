@@ -422,6 +422,38 @@ describe("mergeRepositoryPullRequest service", () => {
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
     const storage = path.join(workspace, "storage", "pull-requests");
     const featureCommit = "abcdef1";
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+          mergeable: true,
+          head: {
+            ref: "feature/test",
+            sha: featureCommit,
+          },
+          base: {
+            ref: "main",
+            sha: "base-commit",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          merged: true,
+          message: "Pull Request successfully merged",
+          sha: "merged-commit",
+        }),
+      );
 
     synchronizePullRequest(
       createSyncPayload(repositoryPath, {
@@ -480,38 +512,7 @@ describe("mergeRepositoryPullRequest service", () => {
           [`git -C ${repositoryPath} update-ref refs/heads/main merged-commit base-commit`]:
             successResult(),
         }),
-        fetchImpl: vi
-          .fn<typeof fetch>()
-          .mockResolvedValueOnce(
-            Response.json([
-              {
-                number: 7,
-                html_url: "https://github.com/acme/alpha/pull/7",
-              },
-            ]),
-          )
-          .mockResolvedValueOnce(
-            Response.json({
-              number: 7,
-              html_url: "https://github.com/acme/alpha/pull/7",
-              mergeable: true,
-              head: {
-                ref: "feature/test",
-                sha: featureCommit,
-              },
-              base: {
-                ref: "main",
-                sha: "base-commit",
-              },
-            }),
-          )
-          .mockResolvedValueOnce(
-            Response.json({
-              merged: true,
-              message: "Pull Request successfully merged",
-              sha: "merged-commit",
-            }),
-          ),
+        fetchImpl,
         githubToken: "token",
       },
     );
@@ -529,6 +530,142 @@ describe("mergeRepositoryPullRequest service", () => {
     );
     expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
       status: "merged",
+    });
+    expect(JSON.parse(String(fetchImpl.mock.calls[2]?.[1]?.body))).toEqual({
+      merge_method: "squash",
+      sha: featureCommit,
+    });
+  });
+
+  it("returns not_ready when GitHub rejects the squash merge because the head changed", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+          mergeable: true,
+          head: {
+            ref: "feature/test",
+            sha: featureCommit,
+          },
+          base: {
+            ref: "main",
+            sha: "base-commit",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            message: "Head branch was modified. Review and try the merge again.",
+          },
+          {
+            status: 409,
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            number: 7,
+            html_url: "https://github.com/acme/alpha/pull/7",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+          mergeable: true,
+          head: {
+            ref: "feature/test",
+            sha: featureCommit,
+          },
+          base: {
+            ref: "main",
+            sha: "base-commit",
+          },
+        }),
+      );
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T00:30:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T00:30:20.000Z"),
+      storage,
+    });
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand: createRunCommandStub({
+          [`git -C ${repositoryPath} fetch --quiet upstream main`]: [
+            successResult(),
+            successResult(),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify FETCH_HEAD`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+          [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]: [
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+            successResult("base-commit\n"),
+          ],
+          [`git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main ${featureCommit}`]:
+            successResult(),
+        }),
+        fetchImpl,
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("not_ready");
+    expect(response.message).toContain("Head branch was modified");
+    expect(response.pullRequest.status).toBe("passed");
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "passed",
+    });
+    expect(JSON.parse(String(fetchImpl.mock.calls[2]?.[1]?.body))).toEqual({
+      merge_method: "squash",
+      sha: featureCommit,
     });
   });
 

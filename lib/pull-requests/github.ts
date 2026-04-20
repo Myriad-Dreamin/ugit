@@ -273,6 +273,7 @@ export async function squashMergeGitHubPullRequest(
   options: Readonly<{
     repository: GitHubRepositoryContext;
     pullRequestNumber: number;
+    expectedHeadCommitHash: string;
     fetchImpl?: GitHubFetch;
     token?: string | null;
   }>,
@@ -302,6 +303,7 @@ export async function squashMergeGitHubPullRequest(
       headers: buildGitHubHeaders(token, true),
       body: JSON.stringify({
         merge_method: "squash",
+        sha: options.expectedHeadCommitHash,
       }),
     },
   );

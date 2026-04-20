@@ -185,6 +185,7 @@ export async function executeApprovedPullRequestMerge(
     await squashMergeGitHubPullRequest({
       repository: options.githubRepository,
       pullRequestNumber: options.canonicalPullRequest.number,
+      expectedHeadCommitHash: options.canonicalPullRequest.headCommitHash,
       fetchImpl: options.fetchImpl,
       token: options.githubToken,
     });
