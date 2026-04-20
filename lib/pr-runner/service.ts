@@ -275,7 +275,7 @@ function toBrowserLatestJobSummary(job: CiJobRecord): BrowserPullRequestLatestJo
     id: job.id,
     status: job.status,
     commitHash: job.commitHash,
-    errorMessage: job.errorMessage,
+    errorMessage: toBrowserCiJobErrorMessage(job),
     mergeStatus: job.mergeStatus,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -293,7 +293,7 @@ function toBrowserCiJobSummary(job: CiJobRecord): BrowserPullRequestCiJobSummary
     branchName: job.branchName,
     baseBranch: job.baseBranch,
     commitHash: job.commitHash,
-    errorMessage: job.errorMessage,
+    errorMessage: toBrowserCiJobErrorMessage(job),
     mergeStatus: job.mergeStatus,
     workflowResultStatus: artifactState.status,
     workflowResultError: artifactState.errorMessage,
@@ -303,6 +303,20 @@ function toBrowserCiJobSummary(job: CiJobRecord): BrowserPullRequestCiJobSummary
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
   };
+}
+
+function toBrowserCiJobErrorMessage(
+  job: Pick<CiJobRecord, "errorMessage" | "status">,
+): string | null {
+  if (!job.errorMessage) {
+    return null;
+  }
+
+  if (job.status === "superseded") {
+    return "The CI job was superseded by a newer pull-request update.";
+  }
+
+  return "The CI job failed with an internal error. Check server logs for details.";
 }
 
 function resolveWorkflowArtifact(job: CiJobRecord): Readonly<{

@@ -18,4 +18,4 @@
 ## 4. Verification
 
 - [x] 4.1 Add focused Vitest coverage for storage/service read models, activity shaping, result-artifact parsing, REST routes, page 404 behavior, REST-only bootstrap behavior, client link construction, and cross-repository isolation
-- [ ] 4.2 Run `pnpm fmt`, `pnpm fmt:check`, `pnpm lint`, targeted `pnpm test` coverage for PR pages/read models/routes, and `pnpm build`
+- [x] 4.2 Run `pnpm fmt`, `pnpm fmt:check`, `pnpm lint`, targeted `pnpm test` coverage for PR pages/read models/routes, and `pnpm build`

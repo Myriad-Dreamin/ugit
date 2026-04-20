@@ -117,6 +117,65 @@ describe("listRepositoryPullRequests service", () => {
     expect(response.pullRequests[0]).not.toHaveProperty("repositoryPath");
     expect(response.pullRequests[0]?.latestJob).not.toHaveProperty("resultPath");
   });
+
+  it("sanitizes CI job errors in browser-safe list and detail responses", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const managedWorktreePath = path.join(repositoryPath, "workflow1");
+    const internalErrorMessage = `Managed workflow worktree ${managedWorktreePath} does not belong to ${repositoryPath}.`;
+
+    synchronizePullRequest(createSyncPayload(repositoryPath), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-20T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "failed",
+      resultPath: null,
+      errorMessage: internalErrorMessage,
+      mergeStatus: "failed",
+      now: createNowFactory("2026-04-20T00:00:20.000Z"),
+      storage,
+    });
+
+    const list = listRepositoryPullRequests(
+      {
+        repositoryName: "alpha",
+      },
+      {
+        cwd: workspace,
+        storage,
+      },
+    );
+    const detail = getRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+      },
+    );
+
+    expect(list.pullRequests[0]?.latestJob?.errorMessage).toBe(
+      "The CI job failed with an internal error. Check server logs for details.",
+    );
+    expect(detail.pullRequest.latestJob?.errorMessage).toBe(
+      "The CI job failed with an internal error. Check server logs for details.",
+    );
+    expect(detail.pullRequest.ciJobs[0]?.errorMessage).toBe(
+      "The CI job failed with an internal error. Check server logs for details.",
+    );
+    expect(JSON.stringify({ detail, list })).not.toContain(workspace);
+    expect(JSON.stringify({ detail, list })).not.toContain(repositoryPath);
+    expect(JSON.stringify({ detail, list })).not.toContain(managedWorktreePath);
+    expect(JSON.stringify({ detail, list })).not.toContain(internalErrorMessage);
+  });
 });
 
 describe("getRepositoryPullRequest service", () => {
