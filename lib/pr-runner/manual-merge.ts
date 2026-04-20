@@ -23,7 +23,13 @@ import {
   validateFastForwardPreflight,
 } from "./merge";
 import { runAsyncCommand, type AsyncCommandRunner } from "./process";
-import { completePullRequestMerge, type CiJobRecord, type PullRequestRecord } from "./storage";
+import {
+  completePullRequestMerge,
+  listCiJobsForPullRequest,
+  readPullRequestForRepository,
+  type CiJobRecord,
+  type PullRequestRecord,
+} from "./storage";
 
 type ManualMergeSharedOptions = Readonly<{
   fetchImpl?: GitHubFetch;
@@ -178,6 +184,26 @@ export async function executeApprovedPullRequestMerge(
     return {
       outcome: "not_ready",
       message: preflight.message,
+    };
+  }
+
+  const refreshedSnapshot = readCurrentPullRequestMergeSnapshot({
+    repositoryName: options.pullRequest.repositoryName,
+    pullRequestId: options.pullRequest.id,
+    storage: options.storage,
+  });
+  const staleApprovalMessage = resolveStaleMergeApprovalMessage({
+    approvedPullRequest: options.pullRequest,
+    approvedLatestJob: options.latestJob,
+    currentPullRequest: refreshedSnapshot?.pullRequest ?? null,
+    currentLatestJob: refreshedSnapshot?.latestJob ?? null,
+    canonicalPullRequest: options.canonicalPullRequest,
+  });
+
+  if (staleApprovalMessage) {
+    return {
+      outcome: "not_ready",
+      message: staleApprovalMessage,
     };
   }
 
@@ -409,6 +435,83 @@ function resolveCurrentCiBlockingReason(
   }
 
   return null;
+}
+
+function readCurrentPullRequestMergeSnapshot(
+  options: Readonly<{
+    repositoryName: string;
+    pullRequestId: number;
+    storage?: StorageOptions | string;
+  }>,
+): Readonly<{
+  pullRequest: PullRequestRecord;
+  latestJob: CiJobRecord | null;
+}> | null {
+  const pullRequest = readPullRequestForRepository(
+    options.repositoryName,
+    options.pullRequestId,
+    options.storage,
+  );
+
+  if (!pullRequest) {
+    return null;
+  }
+
+  return {
+    pullRequest,
+    latestJob: readLatestCiJobForPullRequest(pullRequest, options.storage),
+  };
+}
+
+function readLatestCiJobForPullRequest(
+  pullRequest: PullRequestRecord,
+  storage: StorageOptions | string | undefined,
+): CiJobRecord | null {
+  if (!pullRequest.latestJobId) {
+    return null;
+  }
+
+  return (
+    listCiJobsForPullRequest(pullRequest.id, {
+      repositoryName: pullRequest.repositoryName,
+      storage,
+    }).find((job) => job.id === pullRequest.latestJobId) ?? null
+  );
+}
+
+function resolveStaleMergeApprovalMessage(
+  options: Readonly<{
+    approvedPullRequest: PullRequestRecord;
+    approvedLatestJob: CiJobRecord | null;
+    currentPullRequest: PullRequestRecord | null;
+    currentLatestJob: CiJobRecord | null;
+    canonicalPullRequest: CanonicalGitHubPullRequest;
+  }>,
+): string | null {
+  if (!options.currentPullRequest) {
+    return "This pull request changed while merge approval was running. Refresh the page and try again.";
+  }
+
+  if (options.currentPullRequest.status === "merged") {
+    return "This pull request has already been merged.";
+  }
+
+  if (
+    options.currentPullRequest.headCommitHash !== options.approvedPullRequest.headCommitHash ||
+    options.currentPullRequest.baseBranch !== options.approvedPullRequest.baseBranch ||
+    options.currentPullRequest.remoteName !== options.approvedPullRequest.remoteName ||
+    options.currentPullRequest.latestJobId !== options.approvedPullRequest.latestJobId ||
+    options.currentPullRequest.status !== options.approvedPullRequest.status ||
+    (options.currentLatestJob?.id ?? null) !== (options.approvedLatestJob?.id ?? null)
+  ) {
+    return "The pull request changed while merge approval was running. Refresh the page to review the latest head commit and CI status before merging.";
+  }
+
+  return resolveCurrentCiBlockingReason(
+    options.currentPullRequest,
+    options.currentLatestJob,
+    options.canonicalPullRequest,
+  );
 }
 
 async function readLocalBranchCommit(

@@ -783,6 +783,168 @@ describe("mergeRepositoryPullRequest service", () => {
     });
   });
 
+  it("fails closed when a newer synchronization lands during merge preflight", async () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const featureCommit = "abcdef1";
+    const nextFeatureCommit = "abcdef2";
+    const githubResponses = [
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: featureCommit,
+        },
+        base: {
+          ref: "main",
+          sha: "base-commit",
+        },
+      }),
+      Response.json([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/alpha/pull/7",
+        },
+      ]),
+      Response.json({
+        number: 7,
+        html_url: "https://github.com/acme/alpha/pull/7",
+        mergeable: true,
+        head: {
+          ref: "feature/test",
+          sha: featureCommit,
+        },
+        base: {
+          ref: "main",
+          sha: "base-commit",
+        },
+      }),
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      if ((init?.method ?? "GET") !== "GET") {
+        throw new Error("GitHub merge should not run after a newer synchronization.");
+      }
+
+      const response = githubResponses.shift();
+
+      if (!response) {
+        throw new Error("Unexpected extra GitHub request.");
+      }
+
+      return response;
+    });
+
+    synchronizePullRequest(
+      createSyncPayload(repositoryPath, {
+        commitHash: featureCommit,
+        remoteName: "upstream",
+      }),
+      {
+        cwd: workspace,
+        storage,
+        now: createNowFactory("2026-04-21T01:30:00.000Z"),
+        jobIdFactory: createJobIdFactory("job-1"),
+      },
+    );
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "succeeded",
+      resultPath: "/tmp/job-1-result.json",
+      mergeStatus: "skipped",
+      now: createNowFactory("2026-04-21T01:30:20.000Z"),
+      storage,
+    });
+
+    const mergeBaseCommand = `git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main ${featureCommit}`;
+    let synchronizedDuringPreflight = false;
+    const runCommand = async (command: string, args: readonly string[]) => {
+      const key = `${command} ${args.join(" ")}`;
+
+      if (
+        key === `git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`
+      ) {
+        return successResult();
+      }
+
+      if (key === `git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`) {
+        return successResult("base-commit\n");
+      }
+
+      if (key === `git -C ${repositoryPath} rev-parse --verify refs/heads/main`) {
+        return successResult("base-commit\n");
+      }
+
+      if (key === mergeBaseCommand) {
+        if (!synchronizedDuringPreflight) {
+          synchronizedDuringPreflight = true;
+          synchronizePullRequest(
+            createSyncPayload(repositoryPath, {
+              commitHash: nextFeatureCommit,
+              remoteName: "upstream",
+            }),
+            {
+              cwd: workspace,
+              storage,
+              now: createNowFactory("2026-04-21T01:30:30.000Z"),
+              jobIdFactory: createJobIdFactory("job-2"),
+            },
+          );
+        }
+
+        return successResult();
+      }
+
+      throw new Error(`Unexpected command: ${key}`);
+    };
+
+    const response = await mergeRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+        runGit: createRunGitStub({
+          [`git -C ${repositoryPath} config --get-regexp ^remote\\..*\\.url$`]:
+            "remote.upstream.url https://github.com/acme/alpha.git\n",
+        }),
+        runCommand,
+        fetchImpl,
+        githubToken: "token",
+      },
+    );
+
+    expect(response.outcome).toBe("not_ready");
+    expect(response.message).toContain("changed while merge approval was running");
+    expect(response.pullRequest.status).toBe("queued");
+    expect(response.pullRequest.latestJob).toMatchObject({
+      id: "job-2",
+      status: "queued",
+    });
+    expect(response.pullRequest.mergeReadiness).toMatchObject({
+      state: "blocked",
+      canMerge: false,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
+    expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
+      status: "queued",
+      headCommitHash: nextFeatureCommit,
+      latestJobId: "job-2",
+    });
+  });
+
   it("refuses approval when the canonical GitHub pull request head differs from the passing CI commit", async () => {
     const workspace = createWorkspace();
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
