@@ -225,6 +225,58 @@ describe("getRepositoryPullRequest service", () => {
     expect(detail.pullRequest).not.toHaveProperty("repositoryPath");
   });
 
+  it("sanitizes missing workflow artifact errors for browser-safe detail responses", () => {
+    const workspace = createWorkspace();
+    const repositoryPath = createRepositorySkeleton(workspace, "alpha");
+    const storage = path.join(workspace, "storage", "pull-requests");
+    const missingArtifactPath = path.join(
+      workspace,
+      ".data",
+      "ci-results",
+      "alpha",
+      "feature",
+      "test.json",
+    );
+
+    synchronizePullRequest(createSyncPayload(repositoryPath), {
+      cwd: workspace,
+      storage,
+      now: createNowFactory("2026-04-20T00:00:00.000Z"),
+      jobIdFactory: createJobIdFactory("job-1"),
+    });
+
+    completeCiJob({
+      jobId: "job-1",
+      status: "failed",
+      resultPath: missingArtifactPath,
+      mergeStatus: "failed",
+      now: createNowFactory("2026-04-20T00:00:20.000Z"),
+      storage,
+    });
+
+    const detail = getRepositoryPullRequest(
+      {
+        repositoryName: "alpha",
+        pullRequestId: "1",
+      },
+      {
+        cwd: workspace,
+        storage,
+      },
+    );
+
+    expect(detail.pullRequest.ciJobs).toEqual([
+      expect.objectContaining({
+        id: "job-1",
+        workflowResultStatus: "missing",
+        workflowResultError: "The CI result artifact is unavailable for this job.",
+        workflowExecutions: [],
+      }),
+    ]);
+    expect(detail.pullRequest.ciJobs[0]?.workflowResultError).not.toContain(workspace);
+    expect(detail.pullRequest.ciJobs[0]?.workflowResultError).not.toContain(missingArtifactPath);
+  });
+
   it("rejects pull requests that belong to a different repository", () => {
     const workspace = createWorkspace();
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");

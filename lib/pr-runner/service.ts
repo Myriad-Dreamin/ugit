@@ -323,7 +323,7 @@ function resolveWorkflowArtifact(job: CiJobRecord): Readonly<{
   if (artifactResult.status !== "available") {
     return {
       status: artifactResult.status,
-      errorMessage: artifactResult.errorMessage,
+      errorMessage: toBrowserWorkflowArtifactError(artifactResult.status),
       workflowExecutions: [],
     };
   }
@@ -331,7 +331,7 @@ function resolveWorkflowArtifact(job: CiJobRecord): Readonly<{
   if (artifactResult.artifact.jobId !== job.id) {
     return {
       status: "missing",
-      errorMessage: `CI result artifact ${job.resultPath} belongs to ${artifactResult.artifact.jobId}, not ${job.id}.`,
+      errorMessage: "The CI result artifact does not belong to this job.",
       workflowExecutions: [],
     };
   }
@@ -341,6 +341,19 @@ function resolveWorkflowArtifact(job: CiJobRecord): Readonly<{
     errorMessage: null,
     workflowExecutions: artifactResult.artifact.workflows,
   };
+}
+
+function toBrowserWorkflowArtifactError(
+  status: Exclude<
+    BrowserPullRequestCiJobSummary["workflowResultStatus"],
+    "available" | "not_recorded"
+  >,
+): string {
+  if (status === "malformed") {
+    return "The CI result artifact could not be parsed for this job.";
+  }
+
+  return "The CI result artifact is unavailable for this job.";
 }
 
 function findLatestCiJob(
