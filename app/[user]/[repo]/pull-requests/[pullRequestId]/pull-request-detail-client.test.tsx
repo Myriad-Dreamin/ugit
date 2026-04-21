@@ -40,16 +40,18 @@ describe("PullRequestDetailClient", () => {
           mergeReadiness: {
             state: "blocked",
             canMerge: false,
-            summary: "Set UGIT_GITHUB_TOKEN on the ugit server to enable GitHub merge checks.",
+            summary:
+              "GitHub CLI is not authenticated for this repository. Run gh auth login on the ugit server and verify gh auth status.",
             blockingReasons: [
-              "Set UGIT_GITHUB_TOKEN on the ugit server to enable GitHub merge checks.",
+              "GitHub CLI is not authenticated for this repository. Run gh auth login on the ugit server and verify gh auth status.",
             ],
             checks: [
               {
                 id: "github_mergeability",
                 label: "GitHub mergeability",
                 state: "blocked",
-                message: "Set UGIT_GITHUB_TOKEN on the ugit server to enable GitHub merge checks.",
+                message:
+                  "GitHub CLI is not authenticated for this repository. Run gh auth login on the ugit server and verify gh auth status.",
               },
             ],
             checkedAt: "2026-04-20T00:00:05.000Z",
@@ -59,7 +61,7 @@ describe("PullRequestDetailClient", () => {
     );
 
     expect(markup).toContain(
-      "Set UGIT_GITHUB_TOKEN on the ugit server to enable GitHub merge checks.",
+      "GitHub CLI is not authenticated for this repository. Run gh auth login on the ugit server and verify gh auth status.",
     );
     expect(markup).toContain('disabled=""');
   });

@@ -1,10 +1,21 @@
 import "server-only";
 
 import { execFileSync } from "node:child_process";
+import {
+  combineCommandOutput,
+  runAsyncCommand,
+  type AsyncCommandRunner,
+  type CommandExecutionResult,
+} from "@/lib/pr-runner/process";
 import type { PullRequestGitHubDelegation } from "@/packages/ugit-cli/src/pull-request-contract";
 
-const GITHUB_API_ORIGIN = "https://api.github.com";
-const GITHUB_TOKEN_ENV_NAME = "UGIT_GITHUB_TOKEN";
+const GITHUB_HOSTNAME = "github.com";
+const GITHUB_CLI_UNAVAILABLE_MESSAGE =
+  "GitHub CLI is unavailable on the ugit server. Install gh, run gh auth login, and verify gh auth status.";
+const GITHUB_CLI_AUTH_MESSAGE =
+  "GitHub CLI is not authenticated for this repository. Run gh auth login on the ugit server and verify gh auth status.";
+const GITHUB_CLI_STATUS_GUIDANCE =
+  "Verify gh auth status on the ugit server and check server logs if the problem persists.";
 
 export type GitCommandRunner = (
   file: string,
@@ -14,7 +25,7 @@ export type GitCommandRunner = (
   }>,
 ) => string;
 
-export type GitHubFetch = typeof fetch;
+export type GitHubCommandRunner = AsyncCommandRunner;
 
 type GitHubRemote = Readonly<{
   name: string;
@@ -52,6 +63,16 @@ export type ReadCanonicalGitHubPullRequestResult =
       message: string;
     }>;
 
+class GitHubCommandError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: number,
+  ) {
+    super(message);
+    this.name = "GitHubCommandError";
+  }
+}
+
 export class GitHubPullRequestMergeError extends Error {
   constructor(
     message: string,
@@ -63,28 +84,16 @@ export class GitHubPullRequestMergeError extends Error {
 }
 
 type GitHubPullRequestListItem = Readonly<{
-  number: number;
-  html_url: string;
-}>;
-
-type GitHubPullRequestResponse = Readonly<{
-  number: number;
-  html_url: string;
-  mergeable: boolean | null;
-  head: Readonly<{
-    ref: string;
-    sha: string;
-  }>;
-  base: Readonly<{
-    ref: string;
-    sha: string;
-  }>;
+  number?: unknown;
+  headRefName?: unknown;
+  baseRefName?: unknown;
+  headRepositoryOwner?: unknown;
 }>;
 
 type GitHubMergeResponse = Readonly<{
-  merged?: boolean;
-  message?: string;
-  sha?: string;
+  merged?: unknown;
+  message?: unknown;
+  sha?: unknown;
 }>;
 
 export function buildPullRequestGitHubDelegation(
@@ -173,8 +182,7 @@ export async function readCanonicalGitHubPullRequest(
     preferredRemoteName?: string | null;
     repository?: GitHubRepositoryContext | null;
     runGit?: GitCommandRunner;
-    fetchImpl?: GitHubFetch;
-    token?: string | null;
+    runCommand?: GitHubCommandRunner;
   }>,
 ): Promise<ReadCanonicalGitHubPullRequestResult> {
   const repository =
@@ -194,37 +202,37 @@ export async function readCanonicalGitHubPullRequest(
     };
   }
 
-  const token = resolveGitHubToken(options.token);
-
-  if (!token) {
-    return {
-      status: "unavailable",
-      repository,
-      pullRequest: null,
-      message: `Set ${GITHUB_TOKEN_ENV_NAME} on the ugit server to enable GitHub merge checks.`,
-    };
-  }
-
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const searchParams = new URLSearchParams({
-    state: "open",
-    head: `${repository.owner}:${options.branchName}`,
-    base: options.baseBranch,
-    per_page: "1",
-  });
-
   try {
-    const pullRequests = await requestGitHubJson<readonly GitHubPullRequestListItem[]>(
-      fetchImpl,
-      `/repos/${repository.owner}/${repository.repository}/pulls?${searchParams.toString()}`,
-      {
-        method: "GET",
-        token,
-      },
-    );
-    const pullRequest = pullRequests[0];
+    const pullRequestList = await runGhJsonCommand({
+      args: [
+        "pr",
+        "list",
+        "-R",
+        formatGitHubRepositoryTarget(repository),
+        "--state",
+        "open",
+        "--base",
+        options.baseBranch,
+        "--head",
+        options.branchName,
+        "--json",
+        "number,headRefName,baseRefName,headRepositoryOwner",
+        "--limit",
+        "30",
+      ],
+      runCommand: options.runCommand,
+      fallbackMessage: `GitHub pull-request metadata is unavailable for ${options.branchName} targeting ${options.baseBranch}.`,
+      malformedJsonMessage:
+        "GitHub CLI returned malformed JSON while reading pull-request metadata. " +
+        GITHUB_CLI_STATUS_GUIDANCE,
+    });
+    const pullRequestNumber = selectCanonicalGitHubPullRequestNumber(pullRequestList, {
+      repository,
+      branchName: options.branchName,
+      baseBranch: options.baseBranch,
+    });
 
-    if (!pullRequest) {
+    if (pullRequestNumber === null) {
       return {
         status: "unavailable",
         repository,
@@ -233,27 +241,30 @@ export async function readCanonicalGitHubPullRequest(
       };
     }
 
-    const detail = await requestGitHubJson<GitHubPullRequestResponse>(
-      fetchImpl,
-      `/repos/${repository.owner}/${repository.repository}/pulls/${pullRequest.number}`,
-      {
-        method: "GET",
-        token,
-      },
-    );
+    const pullRequestDetail = await runGhJsonCommand({
+      args: [
+        "pr",
+        "view",
+        String(pullRequestNumber),
+        "-R",
+        formatGitHubRepositoryTarget(repository),
+        "--json",
+        "number,url,mergeable,headRefName,headRefOid,baseRefName,baseRefOid",
+      ],
+      runCommand: options.runCommand,
+      fallbackMessage: `GitHub pull-request metadata is unavailable for ${options.branchName} targeting ${options.baseBranch}.`,
+      malformedJsonMessage:
+        "GitHub CLI returned malformed JSON while reading pull-request metadata. " +
+        GITHUB_CLI_STATUS_GUIDANCE,
+    });
 
     return {
       status: "available",
       repository,
-      pullRequest: {
-        number: detail.number,
-        url: detail.html_url,
-        mergeable: detail.mergeable,
-        headBranch: detail.head.ref,
-        headCommitHash: detail.head.sha,
-        baseBranch: detail.base.ref,
-        baseCommitHash: detail.base.sha,
-      },
+      pullRequest: parseCanonicalGitHubPullRequest(pullRequestDetail, {
+        branchName: options.branchName,
+        baseBranch: options.baseBranch,
+      }),
       message: null,
     };
   } catch (error) {
@@ -264,7 +275,7 @@ export async function readCanonicalGitHubPullRequest(
       message:
         error instanceof Error
           ? error.message
-          : "GitHub pull-request metadata is unavailable for this branch.",
+          : `GitHub pull-request metadata is unavailable for ${options.branchName} targeting ${options.baseBranch}.`,
     };
   }
 }
@@ -274,8 +285,7 @@ export async function squashMergeGitHubPullRequest(
     repository: GitHubRepositoryContext;
     pullRequestNumber: number;
     expectedHeadCommitHash: string;
-    fetchImpl?: GitHubFetch;
-    token?: string | null;
+    runCommand?: GitHubCommandRunner;
   }>,
 ): Promise<
   Readonly<{
@@ -283,44 +293,49 @@ export async function squashMergeGitHubPullRequest(
     mergeCommitHash: string | null;
   }>
 > {
-  const token = resolveGitHubToken(options.token);
+  try {
+    const payload = await runGhJsonCommand({
+      args: [
+        "api",
+        "--hostname",
+        readGitHubHostname(options.repository),
+        "--method",
+        "PUT",
+        `repos/${options.repository.owner}/${options.repository.repository}/pulls/${options.pullRequestNumber}/merge`,
+        "-f",
+        "merge_method=squash",
+        "-f",
+        `sha=${options.expectedHeadCommitHash}`,
+      ],
+      runCommand: options.runCommand,
+      fallbackMessage: "GitHub rejected the squash merge request.",
+      malformedJsonMessage:
+        "GitHub CLI returned malformed JSON while requesting the squash merge. " +
+        GITHUB_CLI_STATUS_GUIDANCE,
+    });
+    const response = parseGitHubMergeResponse(payload);
+    const message =
+      readTrimmedString(response.message) ?? "GitHub accepted the squash merge request.";
 
-  if (!token) {
-    throw new GitHubPullRequestMergeError(
-      `Set ${GITHUB_TOKEN_ENV_NAME} on the ugit server to enable GitHub merges.`,
-      503,
-    );
+    if (response.merged !== true) {
+      throw new GitHubPullRequestMergeError(message, 503);
+    }
+
+    return {
+      message,
+      mergeCommitHash: readTrimmedString(response.sha) ?? null,
+    };
+  } catch (error) {
+    if (error instanceof GitHubPullRequestMergeError) {
+      throw error;
+    }
+
+    if (error instanceof GitHubCommandError) {
+      throw new GitHubPullRequestMergeError(error.message, error.statusCode);
+    }
+
+    throw error;
   }
-
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const response = await fetchImpl(
-    new URL(
-      `/repos/${options.repository.owner}/${options.repository.repository}/pulls/${options.pullRequestNumber}/merge`,
-      GITHUB_API_ORIGIN,
-    ),
-    {
-      method: "PUT",
-      headers: buildGitHubHeaders(token, true),
-      body: JSON.stringify({
-        merge_method: "squash",
-        sha: options.expectedHeadCommitHash,
-      }),
-    },
-  );
-  const payload = await readGitHubResponseBody<GitHubMergeResponse>(response);
-  const message =
-    typeof payload?.message === "string" && payload.message.trim().length > 0
-      ? payload.message
-      : "GitHub rejected the squash merge request.";
-
-  if (!response.ok || payload?.merged !== true) {
-    throw new GitHubPullRequestMergeError(message, response.status || 500);
-  }
-
-  return {
-    message,
-    mergeCommitHash: typeof payload.sha === "string" && payload.sha.length > 0 ? payload.sha : null,
-  };
 }
 
 function selectGitHubRemote(
@@ -395,13 +410,13 @@ function normalizeGitHubRepositoryUrl(remoteUrl: string): string | null {
   const sshMatch = /^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/.exec(remoteUrl);
 
   if (sshMatch) {
-    return `https://github.com/${sshMatch[1]}/${sshMatch[2]}`;
+    return `https://${GITHUB_HOSTNAME}/${sshMatch[1]}/${sshMatch[2]}`;
   }
 
   try {
     const url = new URL(remoteUrl);
 
-    if (url.hostname !== "github.com") {
+    if (url.hostname !== GITHUB_HOSTNAME) {
       return null;
     }
 
@@ -414,7 +429,7 @@ function normalizeGitHubRepositoryUrl(remoteUrl: string): string | null {
       return null;
     }
 
-    return `https://github.com/${owner}/${repository}`;
+    return `https://${GITHUB_HOSTNAME}/${owner}/${repository}`;
   } catch {
     return null;
   }
@@ -441,73 +456,322 @@ function parseGitHubRepositoryCoordinates(repositoryUrl: string): Readonly<{
   }
 }
 
-function resolveGitHubToken(token: string | null | undefined): string | null {
-  const resolvedToken = token ?? process.env[GITHUB_TOKEN_ENV_NAME];
+async function runGhJsonCommand(
+  options: Readonly<{
+    args: readonly string[];
+    runCommand?: GitHubCommandRunner;
+    fallbackMessage: string;
+    malformedJsonMessage: string;
+  }>,
+): Promise<unknown> {
+  const result = await runGhCommand(options);
 
-  if (typeof resolvedToken !== "string" || resolvedToken.trim().length === 0) {
+  try {
+    return JSON.parse(result.stdout) as unknown;
+  } catch {
+    throw new GitHubCommandError(options.malformedJsonMessage, 503);
+  }
+}
+
+async function runGhCommand(
+  options: Readonly<{
+    args: readonly string[];
+    runCommand?: GitHubCommandRunner;
+    fallbackMessage: string;
+  }>,
+): Promise<CommandExecutionResult> {
+  const runCommand = options.runCommand ?? runAsyncCommand;
+
+  try {
+    const result = await runCommand("gh", options.args);
+
+    if (result.exitCode !== 0) {
+      throw buildGitHubCommandError(result, options.fallbackMessage);
+    }
+
+    return result;
+  } catch (error) {
+    if (error instanceof GitHubCommandError) {
+      throw error;
+    }
+
+    throw buildGitHubCommandStartError(error);
+  }
+}
+
+function buildGitHubCommandError(
+  result: CommandExecutionResult,
+  fallbackMessage: string,
+): GitHubCommandError {
+  const output = combineCommandOutput(result);
+
+  if (looksLikeMissingGitHubCli(output)) {
+    return new GitHubCommandError(GITHUB_CLI_UNAVAILABLE_MESSAGE, 503);
+  }
+
+  if (looksLikeGitHubCliAuthFailure(output)) {
+    return new GitHubCommandError(GITHUB_CLI_AUTH_MESSAGE, 503);
+  }
+
+  return new GitHubCommandError(
+    extractGitHubCommandMessage(result) ?? fallbackMessage,
+    extractGitHubHttpStatus(output) ?? 503,
+  );
+}
+
+function buildGitHubCommandStartError(error: unknown): GitHubCommandError {
+  if (looksLikeMissingGitHubCli(error)) {
+    return new GitHubCommandError(GITHUB_CLI_UNAVAILABLE_MESSAGE, 503);
+  }
+
+  return new GitHubCommandError(GITHUB_CLI_UNAVAILABLE_MESSAGE, 503);
+}
+
+function looksLikeMissingGitHubCli(candidate: unknown): boolean {
+  const text = String(
+    candidate instanceof Error
+      ? [candidate.message, readErrorCode(candidate), candidate.cause].filter(Boolean).join("\n")
+      : (candidate ?? ""),
+  ).toLowerCase();
+
+  return (
+    text.includes("failed to start gh") ||
+    text.includes("enoent") ||
+    text.includes("command not found") ||
+    text.includes("executable file not found")
+  );
+}
+
+function looksLikeGitHubCliAuthFailure(output: string): boolean {
+  const normalizedOutput = output.toLowerCase();
+
+  return (
+    normalizedOutput.includes("gh auth login") ||
+    normalizedOutput.includes("not logged into any github hosts") ||
+    normalizedOutput.includes("authentication failed") ||
+    normalizedOutput.includes("authentication required") ||
+    normalizedOutput.includes("requires authentication")
+  );
+}
+
+function extractGitHubCommandMessage(
+  result: Pick<CommandExecutionResult, "stdout" | "stderr">,
+): string | null {
+  const jsonMessage = extractGitHubJsonMessage(result.stdout);
+
+  if (jsonMessage) {
+    return jsonMessage;
+  }
+
+  const output = combineCommandOutput(result);
+
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine
+      .trim()
+      .replace(/^gh:\s*/i, "")
+      .replace(/\s*\(http \d+\)\s*$/i, "")
+      .trim();
+
+    if (line.length > 0) {
+      return line;
+    }
+  }
+
+  return null;
+}
+
+function extractGitHubJsonMessage(output: string): string | null {
+  if (output.trim().length === 0) {
     return null;
   }
 
-  return resolvedToken.trim();
+  try {
+    const payload = JSON.parse(output) as { message?: unknown };
+
+    return readTrimmedString(payload.message);
+  } catch {
+    return null;
+  }
 }
 
-function buildGitHubHeaders(token: string, withJsonBody: boolean): HeadersInit {
+function extractGitHubHttpStatus(output: string): number | null {
+  const match = /http\s+(\d{3})/i.exec(output);
+
+  if (!match) {
+    return null;
+  }
+
+  const statusCode = Number.parseInt(match[1], 10);
+
+  return Number.isFinite(statusCode) ? statusCode : null;
+}
+
+function selectCanonicalGitHubPullRequestNumber(
+  payload: unknown,
+  options: Readonly<{
+    repository: GitHubRepositoryContext;
+    branchName: string;
+    baseBranch: string;
+  }>,
+): number | null {
+  if (!Array.isArray(payload)) {
+    throw new GitHubCommandError(
+      "GitHub CLI returned malformed JSON while reading pull-request metadata. " +
+        GITHUB_CLI_STATUS_GUIDANCE,
+      503,
+    );
+  }
+
+  for (const item of payload as readonly GitHubPullRequestListItem[]) {
+    const headRepositoryOwner = readGitHubOwnerLogin(item.headRepositoryOwner);
+
+    if (
+      readFiniteNumber(item.number) !== null &&
+      readTrimmedString(item.headRefName) === options.branchName &&
+      readTrimmedString(item.baseRefName) === options.baseBranch &&
+      headRepositoryOwner === options.repository.owner
+    ) {
+      return readFiniteNumber(item.number);
+    }
+  }
+
+  return null;
+}
+
+function parseCanonicalGitHubPullRequest(
+  payload: unknown,
+  options: Readonly<{
+    branchName: string;
+    baseBranch: string;
+  }>,
+): CanonicalGitHubPullRequest {
+  if (!isRecord(payload)) {
+    throw new GitHubCommandError(
+      buildIncompleteGitHubMetadataMessage(options.branchName, options.baseBranch),
+      503,
+    );
+  }
+
+  const number = readFiniteNumber(payload.number);
+  const url = readTrimmedString(payload.url);
+  const headBranch = readTrimmedString(payload.headRefName);
+  const headCommitHash = readTrimmedString(payload.headRefOid);
+  const baseBranch = readTrimmedString(payload.baseRefName);
+  const baseCommitHash = readTrimmedString(payload.baseRefOid);
+  const mergeable = normalizeGitHubMergeable(payload.mergeable);
+
+  if (
+    number === null ||
+    !url ||
+    !headBranch ||
+    !headCommitHash ||
+    !baseBranch ||
+    !baseCommitHash ||
+    mergeable === undefined
+  ) {
+    throw new GitHubCommandError(
+      buildIncompleteGitHubMetadataMessage(options.branchName, options.baseBranch),
+      503,
+    );
+  }
+
   return {
-    accept: "application/vnd.github+json",
-    authorization: `Bearer ${token}`,
-    "user-agent": "ugit",
-    "x-github-api-version": "2022-11-28",
-    ...(withJsonBody
-      ? {
-          "content-type": "application/json",
-        }
-      : {}),
+    number,
+    url,
+    mergeable,
+    headBranch,
+    headCommitHash,
+    baseBranch,
+    baseCommitHash,
   };
 }
 
-async function requestGitHubJson<TResponse>(
-  fetchImpl: GitHubFetch,
-  requestPath: string,
-  options: Readonly<{
-    method: "GET" | "PUT";
-    token: string;
-    body?: string;
-  }>,
-): Promise<TResponse> {
-  const response = await fetchImpl(new URL(requestPath, GITHUB_API_ORIGIN), {
-    method: options.method,
-    headers: buildGitHubHeaders(options.token, Boolean(options.body)),
-    body: options.body,
-  });
-  const payload = await readGitHubResponseBody<TResponse & { message?: string }>(response);
-
-  if (!response.ok) {
-    const message =
-      payload &&
-      typeof payload === "object" &&
-      "message" in payload &&
-      typeof payload.message === "string"
-        ? payload.message
-        : `GitHub request failed with status ${response.status}.`;
-
-    throw new Error(message);
+function parseGitHubMergeResponse(payload: unknown): GitHubMergeResponse {
+  if (!isRecord(payload)) {
+    throw new GitHubPullRequestMergeError(
+      "GitHub CLI returned malformed JSON while requesting the squash merge. " +
+        GITHUB_CLI_STATUS_GUIDANCE,
+      503,
+    );
   }
 
-  return payload;
+  return payload as GitHubMergeResponse;
 }
 
-async function readGitHubResponseBody<TResponse>(response: Response): Promise<TResponse> {
-  const responseText = await response.text();
-
-  if (responseText.trim().length === 0) {
-    return {} as TResponse;
+function normalizeGitHubMergeable(value: unknown): boolean | null | undefined {
+  if (value === null || typeof value === "boolean") {
+    return value;
   }
 
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  switch (value.toUpperCase()) {
+    case "MERGEABLE":
+      return true;
+    case "UNKNOWN":
+      return null;
+    case "CONFLICTING":
+    case "UNMERGEABLE":
+      return false;
+    default:
+      return undefined;
+  }
+}
+
+function readGitHubOwnerLogin(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? value.trim() : null;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return readTrimmedString(value.login);
+}
+
+function readGitHubHostname(repository: GitHubRepositoryContext): string {
   try {
-    return JSON.parse(responseText) as TResponse;
+    return new URL(repository.repositoryUrl).hostname;
   } catch {
-    throw new Error(`GitHub returned malformed JSON with status ${response.status}.`);
+    return GITHUB_HOSTNAME;
   }
+}
+
+function formatGitHubRepositoryTarget(repository: GitHubRepositoryContext): string {
+  return `${readGitHubHostname(repository)}/${repository.owner}/${repository.repository}`;
+}
+
+function buildIncompleteGitHubMetadataMessage(branchName: string, baseBranch: string): string {
+  return (
+    `GitHub pull-request metadata is incomplete for ${branchName} targeting ${baseBranch}. ` +
+    GITHUB_CLI_STATUS_GUIDANCE
+  );
+}
+
+function readTrimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
+}
+
+function readErrorCode(error: Error): string {
+  const code =
+    "code" in error && typeof error.code === "string"
+      ? error.code
+      : isRecord(error.cause) && typeof error.cause.code === "string"
+        ? error.cause.code
+        : "";
+
+  return code;
 }
 
 const defaultRunGitCommand: GitCommandRunner = (file, args, options) =>

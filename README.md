@@ -157,11 +157,22 @@ Pass `-m, --machine` to override the inferred machine.
 
 ## GitHub merge approvals
 
-- Set `UGIT_GITHUB_TOKEN` on the ugit server before using manual pull-request merges from the repository detail page.
-- The token must allow pull-request reads plus squash-merge writes for the target GitHub repository.
+- Install `gh` on the ugit server and authenticate it for the target GitHub host with `gh auth login` before using manual pull-request merges from the repository detail page.
+- Use `gh auth status` on the ugit server to confirm the active account and authentication state before troubleshooting merge readiness.
+- The authenticated `gh` session must allow pull-request reads plus squash-merge writes for the target GitHub repository.
 - After the latest CI job succeeds, ugit keeps the pull request in status `passed` until a user approves the merge from the repository pull-request detail page.
 - The merge action rechecks the latest successful CI result, verifies the mirrored local base branch still matches the fetched GitHub base branch, confirms GitHub reports the canonical pull request as mergeable, then performs a GitHub squash merge and realigns the mirrored local base branch to the fetched GitHub base commit.
 - If the branch is no longer fast-forwardable from the mirrored base branch, ugit blocks the merge and tells the user to rebase or update the branch, rerun CI, and retry.
+
+## Validation
+
+Run these checks before finishing a change in this repository:
+
+- `pnpm fmt`
+- `pnpm fmt:check`
+- `pnpm lint`
+- `pnpm test`
+- `pnpm build`
 
 ## What `ugit serve` does
 

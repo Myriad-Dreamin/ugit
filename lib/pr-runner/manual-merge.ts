@@ -9,7 +9,6 @@ import {
   GitHubPullRequestMergeError,
   type CanonicalGitHubPullRequest,
   type GitCommandRunner,
-  type GitHubFetch,
   type GitHubRepositoryContext,
 } from "@/lib/pull-requests/github";
 import type {
@@ -32,8 +31,6 @@ import {
 } from "./storage";
 
 type ManualMergeSharedOptions = Readonly<{
-  fetchImpl?: GitHubFetch;
-  githubToken?: string | null;
   now?: () => Date;
   runCommand?: AsyncCommandRunner;
   runGit?: GitCommandRunner;
@@ -96,8 +93,7 @@ export async function evaluatePullRequestMergeReadiness(
     preferredRemoteName: options.pullRequest.remoteName,
     repository: githubRepository,
     runGit: options.runGit,
-    fetchImpl: options.fetchImpl,
-    token: options.githubToken,
+    runCommand: options.runCommand,
   });
   const baseParityCheck = await buildBaseParityCheck({
     pullRequest: options.pullRequest,
@@ -212,14 +208,10 @@ export async function executeApprovedPullRequestMerge(
       repository: options.githubRepository,
       pullRequestNumber: options.canonicalPullRequest.number,
       expectedHeadCommitHash: options.canonicalPullRequest.headCommitHash,
-      fetchImpl: options.fetchImpl,
-      token: options.githubToken,
+      runCommand: options.runCommand,
     });
   } catch (error) {
-    if (
-      error instanceof GitHubPullRequestMergeError &&
-      [405, 409, 422, 503].includes(error.statusCode)
-    ) {
+    if (error instanceof GitHubPullRequestMergeError) {
       return {
         outcome: "not_ready",
         message: error.message,
