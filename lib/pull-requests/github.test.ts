@@ -65,7 +65,7 @@ describe("GitHub repository context", () => {
 describe("readCanonicalGitHubPullRequest", () => {
   it("reads the canonical pull request and mergeability through gh", async () => {
     const runCommand = createRunCommandStub({
-      "gh pr list -R acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
+      "gh pr list -R github.com/acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
         successResult(
           JSON.stringify([
             {
@@ -78,7 +78,7 @@ describe("readCanonicalGitHubPullRequest", () => {
             },
           ]),
         ),
-      "gh pr view 7 -R acme/alpha --json number,url,mergeable,headRefName,headRefOid,baseRefName,baseRefOid":
+      "gh pr view 7 -R github.com/acme/alpha --json number,url,mergeable,headRefName,headRefOid,baseRefName,baseRefOid":
         successResult(
           JSON.stringify({
             number: 7,
@@ -128,7 +128,7 @@ describe("readCanonicalGitHubPullRequest", () => {
 
   it("fails closed when canonical metadata is incomplete", async () => {
     const runCommand = createRunCommandStub({
-      "gh pr list -R acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
+      "gh pr list -R github.com/acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
         successResult(
           JSON.stringify([
             {
@@ -141,7 +141,7 @@ describe("readCanonicalGitHubPullRequest", () => {
             },
           ]),
         ),
-      "gh pr view 7 -R acme/alpha --json number,url,mergeable,headRefName,headRefOid,baseRefName,baseRefOid":
+      "gh pr view 7 -R github.com/acme/alpha --json number,url,mergeable,headRefName,headRefOid,baseRefName,baseRefOid":
         successResult(
           JSON.stringify({
             number: 7,
@@ -215,7 +215,7 @@ describe("readCanonicalGitHubPullRequest", () => {
 
   it("fails closed when gh authentication is unavailable", async () => {
     const runCommand = createRunCommandStub({
-      "gh pr list -R acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
+      "gh pr list -R github.com/acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
         failureResult("", "To get started with GitHub CLI, please run: gh auth login"),
     });
 
@@ -248,7 +248,7 @@ describe("readCanonicalGitHubPullRequest", () => {
 
   it("fails closed when gh returns malformed JSON", async () => {
     const runCommand = createRunCommandStub({
-      "gh pr list -R acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
+      "gh pr list -R github.com/acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
         successResult("{not-json"),
     });
 

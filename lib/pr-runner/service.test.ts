@@ -1597,14 +1597,17 @@ function createCanonicalGhLookupResponses(
 
 function buildGhListCommand(
   options: Readonly<{
+    host?: string;
     owner: string;
     repository: string;
     branchName: string;
     baseBranch: string;
   }>,
 ): string {
+  const host = options.host ?? "github.com";
+
   return (
-    `gh pr list -R ${options.owner}/${options.repository} --state open --base ` +
+    `gh pr list -R ${host}/${options.owner}/${options.repository} --state open --base ` +
     `${options.baseBranch} --head ${options.branchName} --json ` +
     "number,headRefName,baseRefName,headRepositoryOwner --limit 30"
   );
@@ -1612,13 +1615,16 @@ function buildGhListCommand(
 
 function buildGhViewCommand(
   options: Readonly<{
+    host?: string;
     owner: string;
     repository: string;
     pullRequestNumber: number;
   }>,
 ): string {
+  const host = options.host ?? "github.com";
+
   return (
-    `gh pr view ${options.pullRequestNumber} -R ${options.owner}/${options.repository} --json ` +
+    `gh pr view ${options.pullRequestNumber} -R ${host}/${options.owner}/${options.repository} --json ` +
     "number,url,mergeable,headRefName,headRefOid,baseRefName,baseRefOid"
   );
 }

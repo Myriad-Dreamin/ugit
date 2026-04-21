@@ -741,7 +741,7 @@ function readGitHubHostname(repository: GitHubRepositoryContext): string {
 }
 
 function formatGitHubRepositoryTarget(repository: GitHubRepositoryContext): string {
-  return `${repository.owner}/${repository.repository}`;
+  return `${readGitHubHostname(repository)}/${repository.owner}/${repository.repository}`;
 }
 
 function buildIncompleteGitHubMetadataMessage(branchName: string, baseBranch: string): string {
