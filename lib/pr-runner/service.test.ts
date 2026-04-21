@@ -208,6 +208,11 @@ describe("getRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
+          ...createCanonicalGhLookupResponses({
+            baseBranch: "main",
+            baseCommitHash: "fedcba9",
+            headCommitHash: "abcdef1",
+          }),
           [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]:
             successResult(),
           [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]:
@@ -215,28 +220,6 @@ describe("getRepositoryPullRequest service", () => {
           [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]:
             successResult("fedcba9\n"),
         }),
-        fetchImpl: createGitHubFetchSequence([
-          Response.json([
-            {
-              number: 7,
-              html_url: "https://github.com/acme/alpha/pull/7",
-            },
-          ]),
-          Response.json({
-            number: 7,
-            html_url: "https://github.com/acme/alpha/pull/7",
-            mergeable: true,
-            head: {
-              ref: "feature/test",
-              sha: "abcdef1",
-            },
-            base: {
-              ref: "main",
-              sha: "fedcba9",
-            },
-          }),
-        ]),
-        githubToken: "token",
       },
     );
 
@@ -334,6 +317,11 @@ describe("getRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
+          ...createCanonicalGhLookupResponses({
+            baseBranch: "main",
+            baseCommitHash: "fedcba9",
+            headCommitHash: githubHeadCommit,
+          }),
           [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]:
             successResult(),
           [`git -C ${repositoryPath} rev-parse --verify refs/remotes/upstream/main`]:
@@ -341,28 +329,6 @@ describe("getRepositoryPullRequest service", () => {
           [`git -C ${repositoryPath} rev-parse --verify refs/heads/main`]:
             successResult("fedcba9\n"),
         }),
-        fetchImpl: createGitHubFetchSequence([
-          Response.json([
-            {
-              number: 7,
-              html_url: "https://github.com/acme/alpha/pull/7",
-            },
-          ]),
-          Response.json({
-            number: 7,
-            html_url: "https://github.com/acme/alpha/pull/7",
-            mergeable: true,
-            head: {
-              ref: "feature/test",
-              sha: githubHeadCommit,
-            },
-            base: {
-              ref: "main",
-              sha: "fedcba9",
-            },
-          }),
-        ]),
-        githubToken: "token",
       },
     );
 
@@ -426,38 +392,6 @@ describe("mergeRepositoryPullRequest service", () => {
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
     const storage = path.join(workspace, "storage", "pull-requests");
     const featureCommit = "abcdef1";
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        Response.json([
-          {
-            number: 7,
-            html_url: "https://github.com/acme/alpha/pull/7",
-          },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-          mergeable: true,
-          head: {
-            ref: "feature/test",
-            sha: featureCommit,
-          },
-          base: {
-            ref: "main",
-            sha: "base-commit",
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          merged: true,
-          message: "Pull Request successfully merged",
-          sha: "merged-commit",
-        }),
-      );
 
     synchronizePullRequest(
       createSyncPayload(repositoryPath, {
@@ -494,6 +428,23 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
+          ...createCanonicalGhLookupResponses({
+            baseBranch: "main",
+            baseCommitHash: "base-commit",
+            headCommitHash: featureCommit,
+          }),
+          [buildGhMergeCommand({
+            owner: "acme",
+            repository: "alpha",
+            pullRequestNumber: 7,
+            expectedHeadCommitHash: featureCommit,
+          })]: successResult(
+            JSON.stringify({
+              merged: true,
+              message: "Pull Request successfully merged",
+              sha: "merged-commit",
+            }),
+          ),
           [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
             successResult(),
             successResult(),
@@ -516,8 +467,6 @@ describe("mergeRepositoryPullRequest service", () => {
           [`git -C ${repositoryPath} update-ref refs/heads/main merged-commit base-commit`]:
             successResult(),
         }),
-        fetchImpl,
-        githubToken: "token",
       },
     );
 
@@ -535,10 +484,6 @@ describe("mergeRepositoryPullRequest service", () => {
     expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
       status: "merged",
     });
-    expect(JSON.parse(String(fetchImpl.mock.calls[2]?.[1]?.body))).toEqual({
-      merge_method: "squash",
-      sha: featureCommit,
-    });
   });
 
   it("returns not_ready when GitHub rejects the squash merge because the head changed", async () => {
@@ -546,64 +491,6 @@ describe("mergeRepositoryPullRequest service", () => {
     const repositoryPath = createRepositorySkeleton(workspace, "alpha");
     const storage = path.join(workspace, "storage", "pull-requests");
     const featureCommit = "abcdef1";
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        Response.json([
-          {
-            number: 7,
-            html_url: "https://github.com/acme/alpha/pull/7",
-          },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-          mergeable: true,
-          head: {
-            ref: "feature/test",
-            sha: featureCommit,
-          },
-          base: {
-            ref: "main",
-            sha: "base-commit",
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json(
-          {
-            message: "Head branch was modified. Review and try the merge again.",
-          },
-          {
-            status: 409,
-          },
-        ),
-      )
-      .mockResolvedValueOnce(
-        Response.json([
-          {
-            number: 7,
-            html_url: "https://github.com/acme/alpha/pull/7",
-          },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-          mergeable: true,
-          head: {
-            ref: "feature/test",
-            sha: featureCommit,
-          },
-          base: {
-            ref: "main",
-            sha: "base-commit",
-          },
-        }),
-      );
 
     synchronizePullRequest(
       createSyncPayload(repositoryPath, {
@@ -640,6 +527,74 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
+          [buildGhListCommand({
+            owner: "acme",
+            repository: "alpha",
+            branchName: "feature/test",
+            baseBranch: "main",
+          })]: [
+            successResult(
+              JSON.stringify([
+                {
+                  number: 7,
+                  headRefName: "feature/test",
+                  baseRefName: "main",
+                  headRepositoryOwner: {
+                    login: "acme",
+                  },
+                },
+              ]),
+            ),
+            successResult(
+              JSON.stringify([
+                {
+                  number: 7,
+                  headRefName: "feature/test",
+                  baseRefName: "main",
+                  headRepositoryOwner: {
+                    login: "acme",
+                  },
+                },
+              ]),
+            ),
+          ],
+          [buildGhViewCommand({
+            owner: "acme",
+            repository: "alpha",
+            pullRequestNumber: 7,
+          })]: [
+            successResult(
+              JSON.stringify({
+                number: 7,
+                url: "https://github.com/acme/alpha/pull/7",
+                mergeable: "MERGEABLE",
+                headRefName: "feature/test",
+                headRefOid: featureCommit,
+                baseRefName: "main",
+                baseRefOid: "base-commit",
+              }),
+            ),
+            successResult(
+              JSON.stringify({
+                number: 7,
+                url: "https://github.com/acme/alpha/pull/7",
+                mergeable: "MERGEABLE",
+                headRefName: "feature/test",
+                headRefOid: featureCommit,
+                baseRefName: "main",
+                baseRefOid: "base-commit",
+              }),
+            ),
+          ],
+          [buildGhMergeCommand({
+            owner: "acme",
+            repository: "alpha",
+            pullRequestNumber: 7,
+            expectedHeadCommitHash: featureCommit,
+          })]: failureResult(
+            "",
+            "gh: Head branch was modified. Review and try the merge again. (HTTP 409)",
+          ),
           [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
             successResult(),
             successResult(),
@@ -656,8 +611,6 @@ describe("mergeRepositoryPullRequest service", () => {
           [`git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main ${featureCommit}`]:
             successResult(),
         }),
-        fetchImpl,
-        githubToken: "token",
       },
     );
 
@@ -666,10 +619,6 @@ describe("mergeRepositoryPullRequest service", () => {
     expect(response.pullRequest.status).toBe("passed");
     expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
       status: "passed",
-    });
-    expect(JSON.parse(String(fetchImpl.mock.calls[2]?.[1]?.body))).toEqual({
-      merge_method: "squash",
-      sha: featureCommit,
     });
   });
 
@@ -715,6 +664,65 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
+          [buildGhListCommand({
+            owner: "acme",
+            repository: "alpha",
+            branchName: "feature/test",
+            baseBranch: "main",
+          })]: [
+            successResult(
+              JSON.stringify([
+                {
+                  number: 7,
+                  headRefName: "feature/test",
+                  baseRefName: "main",
+                  headRepositoryOwner: {
+                    login: "acme",
+                  },
+                },
+              ]),
+            ),
+            successResult(
+              JSON.stringify([
+                {
+                  number: 7,
+                  headRefName: "feature/test",
+                  baseRefName: "main",
+                  headRepositoryOwner: {
+                    login: "acme",
+                  },
+                },
+              ]),
+            ),
+          ],
+          [buildGhViewCommand({
+            owner: "acme",
+            repository: "alpha",
+            pullRequestNumber: 7,
+          })]: [
+            successResult(
+              JSON.stringify({
+                number: 7,
+                url: "https://github.com/acme/alpha/pull/7",
+                mergeable: "MERGEABLE",
+                headRefName: "feature/test",
+                headRefOid: featureCommit,
+                baseRefName: "main",
+                baseRefOid: newBaseCommit,
+              }),
+            ),
+            successResult(
+              JSON.stringify({
+                number: 7,
+                url: "https://github.com/acme/alpha/pull/7",
+                mergeable: "MERGEABLE",
+                headRefName: "feature/test",
+                headRefOid: featureCommit,
+                baseRefName: "main",
+                baseRefOid: newBaseCommit,
+              }),
+            ),
+          ],
           [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
             successResult(),
             successResult(),
@@ -731,47 +739,6 @@ describe("mergeRepositoryPullRequest service", () => {
           [`git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main ${featureCommit}`]:
             failureResult(),
         }),
-        fetchImpl: createGitHubFetchSequence([
-          Response.json([
-            {
-              number: 7,
-              html_url: "https://github.com/acme/alpha/pull/7",
-            },
-          ]),
-          Response.json({
-            number: 7,
-            html_url: "https://github.com/acme/alpha/pull/7",
-            mergeable: true,
-            head: {
-              ref: "feature/test",
-              sha: featureCommit,
-            },
-            base: {
-              ref: "main",
-              sha: newBaseCommit,
-            },
-          }),
-          Response.json([
-            {
-              number: 7,
-              html_url: "https://github.com/acme/alpha/pull/7",
-            },
-          ]),
-          Response.json({
-            number: 7,
-            html_url: "https://github.com/acme/alpha/pull/7",
-            mergeable: true,
-            head: {
-              ref: "feature/test",
-              sha: featureCommit,
-            },
-            base: {
-              ref: "main",
-              sha: newBaseCommit,
-            },
-          }),
-        ]),
-        githubToken: "token",
       },
     );
 
@@ -789,59 +756,6 @@ describe("mergeRepositoryPullRequest service", () => {
     const storage = path.join(workspace, "storage", "pull-requests");
     const featureCommit = "abcdef1";
     const nextFeatureCommit = "abcdef2";
-    const githubResponses = [
-      Response.json([
-        {
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-        },
-      ]),
-      Response.json({
-        number: 7,
-        html_url: "https://github.com/acme/alpha/pull/7",
-        mergeable: true,
-        head: {
-          ref: "feature/test",
-          sha: featureCommit,
-        },
-        base: {
-          ref: "main",
-          sha: "base-commit",
-        },
-      }),
-      Response.json([
-        {
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-        },
-      ]),
-      Response.json({
-        number: 7,
-        html_url: "https://github.com/acme/alpha/pull/7",
-        mergeable: true,
-        head: {
-          ref: "feature/test",
-          sha: featureCommit,
-        },
-        base: {
-          ref: "main",
-          sha: "base-commit",
-        },
-      }),
-    ];
-    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
-      if ((init?.method ?? "GET") !== "GET") {
-        throw new Error("GitHub merge should not run after a newer synchronization.");
-      }
-
-      const response = githubResponses.shift();
-
-      if (!response) {
-        throw new Error("Unexpected extra GitHub request.");
-      }
-
-      return response;
-    });
 
     synchronizePullRequest(
       createSyncPayload(repositoryPath, {
@@ -867,8 +781,57 @@ describe("mergeRepositoryPullRequest service", () => {
 
     const mergeBaseCommand = `git -C ${repositoryPath} merge-base --is-ancestor refs/heads/main ${featureCommit}`;
     let synchronizedDuringPreflight = false;
+    let ghLookupCount = 0;
     const runCommand = async (command: string, args: readonly string[]) => {
       const key = `${command} ${args.join(" ")}`;
+
+      if (
+        key ===
+        buildGhListCommand({
+          owner: "acme",
+          repository: "alpha",
+          branchName: "feature/test",
+          baseBranch: "main",
+        })
+      ) {
+        ghLookupCount += 1;
+
+        return successResult(
+          JSON.stringify([
+            {
+              number: 7,
+              headRefName: "feature/test",
+              baseRefName: "main",
+              headRepositoryOwner: {
+                login: "acme",
+              },
+            },
+          ]),
+        );
+      }
+
+      if (
+        key ===
+        buildGhViewCommand({
+          owner: "acme",
+          repository: "alpha",
+          pullRequestNumber: 7,
+        })
+      ) {
+        ghLookupCount += 1;
+
+        return successResult(
+          JSON.stringify({
+            number: 7,
+            url: "https://github.com/acme/alpha/pull/7",
+            mergeable: "MERGEABLE",
+            headRefName: "feature/test",
+            headRefOid: featureCommit,
+            baseRefName: "main",
+            baseRefOid: "base-commit",
+          }),
+        );
+      }
 
       if (
         key === `git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`
@@ -920,8 +883,6 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand,
-        fetchImpl,
-        githubToken: "token",
       },
     );
 
@@ -936,8 +897,7 @@ describe("mergeRepositoryPullRequest service", () => {
       state: "blocked",
       canMerge: false,
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
-    expect(fetchImpl.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
+    expect(ghLookupCount).toBe(4);
     expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
       status: "queued",
       headCommitHash: nextFeatureCommit,
@@ -951,59 +911,6 @@ describe("mergeRepositoryPullRequest service", () => {
     const storage = path.join(workspace, "storage", "pull-requests");
     const featureCommit = "abcdef1";
     const githubHeadCommit = "github-head-commit";
-    const githubResponses = [
-      Response.json([
-        {
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-        },
-      ]),
-      Response.json({
-        number: 7,
-        html_url: "https://github.com/acme/alpha/pull/7",
-        mergeable: true,
-        head: {
-          ref: "feature/test",
-          sha: githubHeadCommit,
-        },
-        base: {
-          ref: "main",
-          sha: "base-commit",
-        },
-      }),
-      Response.json([
-        {
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-        },
-      ]),
-      Response.json({
-        number: 7,
-        html_url: "https://github.com/acme/alpha/pull/7",
-        mergeable: true,
-        head: {
-          ref: "feature/test",
-          sha: githubHeadCommit,
-        },
-        base: {
-          ref: "main",
-          sha: "base-commit",
-        },
-      }),
-    ];
-    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
-      if ((init?.method ?? "GET") !== "GET") {
-        throw new Error("GitHub merge should not run when the canonical head is stale.");
-      }
-
-      const response = githubResponses.shift();
-
-      if (!response) {
-        throw new Error("Unexpected extra GitHub request.");
-      }
-
-      return response;
-    });
 
     synchronizePullRequest(
       createSyncPayload(repositoryPath, {
@@ -1040,6 +947,65 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
+          [buildGhListCommand({
+            owner: "acme",
+            repository: "alpha",
+            branchName: "feature/test",
+            baseBranch: "main",
+          })]: [
+            successResult(
+              JSON.stringify([
+                {
+                  number: 7,
+                  headRefName: "feature/test",
+                  baseRefName: "main",
+                  headRepositoryOwner: {
+                    login: "acme",
+                  },
+                },
+              ]),
+            ),
+            successResult(
+              JSON.stringify([
+                {
+                  number: 7,
+                  headRefName: "feature/test",
+                  baseRefName: "main",
+                  headRepositoryOwner: {
+                    login: "acme",
+                  },
+                },
+              ]),
+            ),
+          ],
+          [buildGhViewCommand({
+            owner: "acme",
+            repository: "alpha",
+            pullRequestNumber: 7,
+          })]: [
+            successResult(
+              JSON.stringify({
+                number: 7,
+                url: "https://github.com/acme/alpha/pull/7",
+                mergeable: "MERGEABLE",
+                headRefName: "feature/test",
+                headRefOid: githubHeadCommit,
+                baseRefName: "main",
+                baseRefOid: "base-commit",
+              }),
+            ),
+            successResult(
+              JSON.stringify({
+                number: 7,
+                url: "https://github.com/acme/alpha/pull/7",
+                mergeable: "MERGEABLE",
+                headRefName: "feature/test",
+                headRefOid: githubHeadCommit,
+                baseRefName: "main",
+                baseRefOid: "base-commit",
+              }),
+            ),
+          ],
           [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
             successResult(),
             successResult(),
@@ -1053,8 +1019,6 @@ describe("mergeRepositoryPullRequest service", () => {
             successResult("base-commit\n"),
           ],
         }),
-        fetchImpl,
-        githubToken: "token",
       },
     );
 
@@ -1066,8 +1030,6 @@ describe("mergeRepositoryPullRequest service", () => {
       canMerge: false,
       summary: expect.stringContaining(githubHeadCommit),
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
-    expect(fetchImpl.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
     expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
       status: "passed",
     });
@@ -1079,59 +1041,6 @@ describe("mergeRepositoryPullRequest service", () => {
     const storage = path.join(workspace, "storage", "pull-requests");
     const featureCommit = "abcdef1";
     const githubBaseBranch = "release";
-    const githubResponses = [
-      Response.json([
-        {
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-        },
-      ]),
-      Response.json({
-        number: 7,
-        html_url: "https://github.com/acme/alpha/pull/7",
-        mergeable: true,
-        head: {
-          ref: "feature/test",
-          sha: featureCommit,
-        },
-        base: {
-          ref: githubBaseBranch,
-          sha: "base-commit",
-        },
-      }),
-      Response.json([
-        {
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-        },
-      ]),
-      Response.json({
-        number: 7,
-        html_url: "https://github.com/acme/alpha/pull/7",
-        mergeable: true,
-        head: {
-          ref: "feature/test",
-          sha: featureCommit,
-        },
-        base: {
-          ref: githubBaseBranch,
-          sha: "base-commit",
-        },
-      }),
-    ];
-    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
-      if ((init?.method ?? "GET") !== "GET") {
-        throw new Error("GitHub merge should not run when the canonical base branch is stale.");
-      }
-
-      const response = githubResponses.shift();
-
-      if (!response) {
-        throw new Error("Unexpected extra GitHub request.");
-      }
-
-      return response;
-    });
 
     synchronizePullRequest(
       createSyncPayload(repositoryPath, {
@@ -1168,6 +1077,65 @@ describe("mergeRepositoryPullRequest service", () => {
             "remote.upstream.url https://github.com/acme/alpha.git\n",
         }),
         runCommand: createRunCommandStub({
+          [buildGhListCommand({
+            owner: "acme",
+            repository: "alpha",
+            branchName: "feature/test",
+            baseBranch: "main",
+          })]: [
+            successResult(
+              JSON.stringify([
+                {
+                  number: 7,
+                  headRefName: "feature/test",
+                  baseRefName: "main",
+                  headRepositoryOwner: {
+                    login: "acme",
+                  },
+                },
+              ]),
+            ),
+            successResult(
+              JSON.stringify([
+                {
+                  number: 7,
+                  headRefName: "feature/test",
+                  baseRefName: "main",
+                  headRepositoryOwner: {
+                    login: "acme",
+                  },
+                },
+              ]),
+            ),
+          ],
+          [buildGhViewCommand({
+            owner: "acme",
+            repository: "alpha",
+            pullRequestNumber: 7,
+          })]: [
+            successResult(
+              JSON.stringify({
+                number: 7,
+                url: "https://github.com/acme/alpha/pull/7",
+                mergeable: "MERGEABLE",
+                headRefName: "feature/test",
+                headRefOid: featureCommit,
+                baseRefName: githubBaseBranch,
+                baseRefOid: "base-commit",
+              }),
+            ),
+            successResult(
+              JSON.stringify({
+                number: 7,
+                url: "https://github.com/acme/alpha/pull/7",
+                mergeable: "MERGEABLE",
+                headRefName: "feature/test",
+                headRefOid: featureCommit,
+                baseRefName: githubBaseBranch,
+                baseRefOid: "base-commit",
+              }),
+            ),
+          ],
           [`git -C ${repositoryPath} fetch --quiet upstream main:refs/remotes/upstream/main`]: [
             successResult(),
             successResult(),
@@ -1181,8 +1149,6 @@ describe("mergeRepositoryPullRequest service", () => {
             successResult("base-commit\n"),
           ],
         }),
-        fetchImpl,
-        githubToken: "token",
       },
     );
 
@@ -1202,8 +1168,6 @@ describe("mergeRepositoryPullRequest service", () => {
         }),
       ]),
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
-    expect(fetchImpl.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
     expect(readPullRequest(repositoryPath, "feature/test", storage)).toMatchObject({
       status: "passed",
     });
@@ -1575,12 +1539,101 @@ function failureResult(
   };
 }
 
-function createGitHubFetchSequence(responses: readonly Response[]): typeof fetch {
-  const fetchImpl = vi.fn<typeof fetch>();
+function createCanonicalGhLookupResponses(
+  options: Readonly<{
+    owner?: string;
+    repository?: string;
+    branchName?: string;
+    baseBranch?: string;
+    pullRequestNumber?: number;
+    headRepositoryOwner?: string;
+    mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+    headCommitHash?: string;
+    baseCommitHash?: string;
+  }> = {},
+): Readonly<Record<string, ReturnType<typeof successResult>>> {
+  const owner = options.owner ?? "acme";
+  const repository = options.repository ?? "alpha";
+  const branchName = options.branchName ?? "feature/test";
+  const baseBranch = options.baseBranch ?? "main";
+  const pullRequestNumber = options.pullRequestNumber ?? 7;
+  const headRepositoryOwner = options.headRepositoryOwner ?? owner;
 
-  responses.forEach((response) => {
-    fetchImpl.mockResolvedValueOnce(response);
-  });
+  return {
+    [buildGhListCommand({
+      owner,
+      repository,
+      branchName,
+      baseBranch,
+    })]: successResult(
+      JSON.stringify([
+        {
+          number: pullRequestNumber,
+          headRefName: branchName,
+          baseRefName: baseBranch,
+          headRepositoryOwner: {
+            login: headRepositoryOwner,
+          },
+        },
+      ]),
+    ),
+    [buildGhViewCommand({
+      owner,
+      repository,
+      pullRequestNumber,
+    })]: successResult(
+      JSON.stringify({
+        number: pullRequestNumber,
+        url: `https://github.com/${owner}/${repository}/pull/${pullRequestNumber}`,
+        mergeable: options.mergeable ?? "MERGEABLE",
+        headRefName: branchName,
+        headRefOid: options.headCommitHash ?? "abcdef1",
+        baseRefName: baseBranch,
+        baseRefOid: options.baseCommitHash ?? "base-commit",
+      }),
+    ),
+  };
+}
 
-  return fetchImpl;
+function buildGhListCommand(
+  options: Readonly<{
+    owner: string;
+    repository: string;
+    branchName: string;
+    baseBranch: string;
+  }>,
+): string {
+  return (
+    `gh pr list -R ${options.owner}/${options.repository} --state open --base ` +
+    `${options.baseBranch} --head ${options.branchName} --json ` +
+    "number,headRefName,baseRefName,headRepositoryOwner --limit 30"
+  );
+}
+
+function buildGhViewCommand(
+  options: Readonly<{
+    owner: string;
+    repository: string;
+    pullRequestNumber: number;
+  }>,
+): string {
+  return (
+    `gh pr view ${options.pullRequestNumber} -R ${options.owner}/${options.repository} --json ` +
+    "number,url,mergeable,headRefName,headRefOid,baseRefName,baseRefOid"
+  );
+}
+
+function buildGhMergeCommand(
+  options: Readonly<{
+    owner: string;
+    repository: string;
+    pullRequestNumber: number;
+    expectedHeadCommitHash: string;
+  }>,
+): string {
+  return (
+    "gh api --hostname github.com --method PUT " +
+    `repos/${options.owner}/${options.repository}/pulls/${options.pullRequestNumber}/merge ` +
+    `-f merge_method=squash -f sha=${options.expectedHeadCommitHash}`
+  );
 }

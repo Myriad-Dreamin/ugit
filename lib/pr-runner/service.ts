@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { StorageOptions } from "@/lib/storage/sqlite";
-import type { GitCommandRunner, GitHubFetch } from "@/lib/pull-requests/github";
+import type { GitCommandRunner } from "@/lib/pull-requests/github";
 import type {
   BrowserPullRequestCiJobSummary,
   BrowserPullRequestDetail,
@@ -45,8 +45,6 @@ import {
 
 export type PullRequestServiceOptions = Readonly<{
   cwd?: string;
-  fetchImpl?: GitHubFetch;
-  githubToken?: string | null;
   storage?: StorageOptions | string;
   now?: () => Date;
   jobIdFactory?: () => string;
@@ -169,8 +167,6 @@ export async function mergeRepositoryPullRequest(
     now: options.now,
     runGit: options.runGit,
     runCommand: options.runCommand ?? runAsyncCommand,
-    fetchImpl: options.fetchImpl,
-    githubToken: options.githubToken,
     storage: options.storage,
   });
 
@@ -197,8 +193,6 @@ export async function mergeRepositoryPullRequest(
     canonicalPullRequest: mergeEvaluation.canonicalPullRequest,
     now: options.now,
     runCommand: options.runCommand ?? runAsyncCommand,
-    fetchImpl: options.fetchImpl,
-    githubToken: options.githubToken,
     storage: options.storage,
   });
   const detail = await buildRepositoryPullRequestDetail(request, options);
@@ -284,8 +278,6 @@ async function buildRepositoryPullRequestDetail(
     now: options.now,
     runGit: options.runGit,
     runCommand: options.runCommand ?? runAsyncCommand,
-    fetchImpl: options.fetchImpl,
-    githubToken: options.githubToken,
     storage: options.storage,
   });
 

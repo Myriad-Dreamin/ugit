@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildPullRequestGitHubDelegation,
   readCanonicalGitHubPullRequest,
@@ -6,11 +6,8 @@ import {
   squashMergeGitHubPullRequest,
   GitHubPullRequestMergeError,
   type GitCommandRunner,
+  type GitHubCommandRunner,
 } from "@/lib/pull-requests/github";
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 describe("GitHub repository context", () => {
   it("prefers upstream remotes for compare links when GitHub metadata is available", () => {
@@ -66,34 +63,34 @@ describe("GitHub repository context", () => {
 });
 
 describe("readCanonicalGitHubPullRequest", () => {
-  it("reads the canonical pull request and mergeability through the GitHub API", async () => {
-    vi.stubEnv("UGIT_GITHUB_TOKEN", "test-token");
-
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        Response.json([
-          {
+  it("reads the canonical pull request and mergeability through gh", async () => {
+    const runCommand = createRunCommandStub({
+      "gh pr list -R acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
+        successResult(
+          JSON.stringify([
+            {
+              number: 7,
+              headRefName: "feature/test",
+              baseRefName: "main",
+              headRepositoryOwner: {
+                login: "acme",
+              },
+            },
+          ]),
+        ),
+      "gh pr view 7 -R acme/alpha --json number,url,mergeable,headRefName,headRefOid,baseRefName,baseRefOid":
+        successResult(
+          JSON.stringify({
             number: 7,
-            html_url: "https://github.com/acme/alpha/pull/7",
-          },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          number: 7,
-          html_url: "https://github.com/acme/alpha/pull/7",
-          mergeable: true,
-          head: {
-            ref: "feature/test",
-            sha: "abcdef1",
-          },
-          base: {
-            ref: "main",
-            sha: "fedcba9",
-          },
-        }),
-      );
+            url: "https://github.com/acme/alpha/pull/7",
+            mergeable: "MERGEABLE",
+            headRefName: "feature/test",
+            headRefOid: "abcdef1",
+            baseRefName: "main",
+            baseRefOid: "fedcba9",
+          }),
+        ),
+    });
 
     await expect(
       readCanonicalGitHubPullRequest({
@@ -106,7 +103,7 @@ describe("readCanonicalGitHubPullRequest", () => {
           owner: "acme",
           repository: "alpha",
         },
-        fetchImpl,
+        runCommand,
       }),
     ).resolves.toEqual({
       status: "available",
@@ -129,7 +126,34 @@ describe("readCanonicalGitHubPullRequest", () => {
     });
   });
 
-  it("fails closed when the GitHub token is missing", async () => {
+  it("fails closed when canonical metadata is incomplete", async () => {
+    const runCommand = createRunCommandStub({
+      "gh pr list -R acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
+        successResult(
+          JSON.stringify([
+            {
+              number: 7,
+              headRefName: "feature/test",
+              baseRefName: "main",
+              headRepositoryOwner: {
+                login: "acme",
+              },
+            },
+          ]),
+        ),
+      "gh pr view 7 -R acme/alpha --json number,url,mergeable,headRefName,headRefOid,baseRefName,baseRefOid":
+        successResult(
+          JSON.stringify({
+            number: 7,
+            url: "https://github.com/acme/alpha/pull/7",
+            mergeable: "MERGEABLE",
+            headRefName: "feature/test",
+            baseRefName: "main",
+            baseRefOid: "fedcba9",
+          }),
+        ),
+    });
+
     await expect(
       readCanonicalGitHubPullRequest({
         repositoryPath: "/tmp/alpha",
@@ -141,7 +165,7 @@ describe("readCanonicalGitHubPullRequest", () => {
           owner: "acme",
           repository: "alpha",
         },
-        fetchImpl: vi.fn<typeof fetch>(),
+        runCommand,
       }),
     ).resolves.toEqual({
       status: "unavailable",
@@ -152,22 +176,122 @@ describe("readCanonicalGitHubPullRequest", () => {
         repository: "alpha",
       },
       pullRequest: null,
-      message: "Set UGIT_GITHUB_TOKEN on the ugit server to enable GitHub merge checks.",
+      message:
+        "GitHub pull-request metadata is incomplete for feature/test targeting main. Verify gh auth status on the ugit server and check server logs if the problem persists.",
+    });
+  });
+
+  it("fails closed when gh is unavailable", async () => {
+    const runCommand = vi.fn<GitHubCommandRunner>(async () => {
+      throw new Error("Failed to start gh pr list.");
+    });
+
+    await expect(
+      readCanonicalGitHubPullRequest({
+        repositoryPath: "/tmp/alpha",
+        branchName: "feature/test",
+        baseBranch: "main",
+        repository: {
+          remoteName: "upstream",
+          repositoryUrl: "https://github.com/acme/alpha",
+          owner: "acme",
+          repository: "alpha",
+        },
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "unavailable",
+      repository: {
+        remoteName: "upstream",
+        repositoryUrl: "https://github.com/acme/alpha",
+        owner: "acme",
+        repository: "alpha",
+      },
+      pullRequest: null,
+      message:
+        "GitHub CLI is unavailable on the ugit server. Install gh, run gh auth login, and verify gh auth status.",
+    });
+  });
+
+  it("fails closed when gh authentication is unavailable", async () => {
+    const runCommand = createRunCommandStub({
+      "gh pr list -R acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
+        failureResult("", "To get started with GitHub CLI, please run: gh auth login"),
+    });
+
+    await expect(
+      readCanonicalGitHubPullRequest({
+        repositoryPath: "/tmp/alpha",
+        branchName: "feature/test",
+        baseBranch: "main",
+        repository: {
+          remoteName: "upstream",
+          repositoryUrl: "https://github.com/acme/alpha",
+          owner: "acme",
+          repository: "alpha",
+        },
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "unavailable",
+      repository: {
+        remoteName: "upstream",
+        repositoryUrl: "https://github.com/acme/alpha",
+        owner: "acme",
+        repository: "alpha",
+      },
+      pullRequest: null,
+      message:
+        "GitHub CLI is not authenticated for this repository. Run gh auth login on the ugit server and verify gh auth status.",
+    });
+  });
+
+  it("fails closed when gh returns malformed JSON", async () => {
+    const runCommand = createRunCommandStub({
+      "gh pr list -R acme/alpha --state open --base main --head feature/test --json number,headRefName,baseRefName,headRepositoryOwner --limit 30":
+        successResult("{not-json"),
+    });
+
+    await expect(
+      readCanonicalGitHubPullRequest({
+        repositoryPath: "/tmp/alpha",
+        branchName: "feature/test",
+        baseBranch: "main",
+        repository: {
+          remoteName: "upstream",
+          repositoryUrl: "https://github.com/acme/alpha",
+          owner: "acme",
+          repository: "alpha",
+        },
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      status: "unavailable",
+      repository: {
+        remoteName: "upstream",
+        repositoryUrl: "https://github.com/acme/alpha",
+        owner: "acme",
+        repository: "alpha",
+      },
+      pullRequest: null,
+      message:
+        "GitHub CLI returned malformed JSON while reading pull-request metadata. Verify gh auth status on the ugit server and check server logs if the problem persists.",
     });
   });
 });
 
 describe("squashMergeGitHubPullRequest", () => {
-  it("executes a squash merge through the GitHub API", async () => {
-    vi.stubEnv("UGIT_GITHUB_TOKEN", "test-token");
-
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      Response.json({
-        merged: true,
-        message: "Pull Request successfully merged",
-        sha: "1234567",
-      }),
-    );
+  it("executes a squash merge through gh api", async () => {
+    const runCommand = createRunCommandStub({
+      "gh api --hostname github.com --method PUT repos/acme/alpha/pulls/7/merge -f merge_method=squash -f sha=abcdef1":
+        successResult(
+          JSON.stringify({
+            merged: true,
+            message: "Pull Request successfully merged",
+            sha: "1234567",
+          }),
+        ),
+    });
 
     await expect(
       squashMergeGitHubPullRequest({
@@ -179,33 +303,22 @@ describe("squashMergeGitHubPullRequest", () => {
         },
         pullRequestNumber: 7,
         expectedHeadCommitHash: "abcdef1",
-        fetchImpl,
+        runCommand,
       }),
     ).resolves.toEqual({
       message: "Pull Request successfully merged",
       mergeCommitHash: "1234567",
     });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({
-      merge_method: "squash",
-      sha: "abcdef1",
-    });
   });
 
   it("surfaces merge failures as typed errors", async () => {
-    vi.stubEnv("UGIT_GITHUB_TOKEN", "test-token");
-
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      Response.json(
-        {
-          message: "Pull Request is not mergeable",
-        },
-        {
-          status: 409,
-        },
-      ),
-    );
+    const runCommand = createRunCommandStub({
+      "gh api --hostname github.com --method PUT repos/acme/alpha/pulls/7/merge -f merge_method=squash -f sha=abcdef1":
+        failureResult(
+          "",
+          "gh: Head branch was modified. Review and try the merge again. (HTTP 409)",
+        ),
+    });
 
     await expect(
       squashMergeGitHubPullRequest({
@@ -217,8 +330,113 @@ describe("squashMergeGitHubPullRequest", () => {
         },
         pullRequestNumber: 7,
         expectedHeadCommitHash: "abcdef1",
-        fetchImpl,
+        runCommand,
       }),
-    ).rejects.toEqual(new GitHubPullRequestMergeError("Pull Request is not mergeable", 409));
+    ).rejects.toEqual(
+      new GitHubPullRequestMergeError(
+        "Head branch was modified. Review and try the merge again.",
+        409,
+      ),
+    );
+  });
+
+  it("surfaces command-start failures as typed errors", async () => {
+    const runCommand = vi.fn<GitHubCommandRunner>(async () => {
+      throw new Error("Failed to start gh api.");
+    });
+
+    await expect(
+      squashMergeGitHubPullRequest({
+        repository: {
+          remoteName: "upstream",
+          repositoryUrl: "https://github.com/acme/alpha",
+          owner: "acme",
+          repository: "alpha",
+        },
+        pullRequestNumber: 7,
+        expectedHeadCommitHash: "abcdef1",
+        runCommand,
+      }),
+    ).rejects.toEqual(
+      new GitHubPullRequestMergeError(
+        "GitHub CLI is unavailable on the ugit server. Install gh, run gh auth login, and verify gh auth status.",
+        503,
+      ),
+    );
   });
 });
+
+function createRunCommandStub(
+  responses: Readonly<
+    Record<
+      string,
+      | Readonly<{
+          exitCode: number;
+          stdout: string;
+          stderr: string;
+        }>
+      | readonly Readonly<{
+          exitCode: number;
+          stdout: string;
+          stderr: string;
+        }>[]
+    >
+  >,
+): ReturnType<typeof vi.fn<GitHubCommandRunner>> {
+  return vi.fn<GitHubCommandRunner>(async (command, args) => {
+    const key = `${command} ${args.join(" ")}`;
+    const configuredResponse = responses[key];
+
+    if (!configuredResponse) {
+      throw new Error(`Unexpected command: ${key}`);
+    }
+
+    const response = Array.isArray(configuredResponse)
+      ? (
+          configuredResponse as Array<
+            Readonly<{
+              exitCode: number;
+              stdout: string;
+              stderr: string;
+            }>
+          >
+        ).shift()
+      : configuredResponse;
+
+    if (!response) {
+      throw new Error(`Unexpected command: ${key}`);
+    }
+
+    return response;
+  });
+}
+
+function successResult(
+  stdout: string = "",
+  stderr: string = "",
+): Readonly<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return {
+    exitCode: 0,
+    stdout,
+    stderr,
+  };
+}
+
+function failureResult(
+  stdout: string = "",
+  stderr: string = "",
+): Readonly<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return {
+    exitCode: 1,
+    stdout,
+    stderr,
+  };
+}
